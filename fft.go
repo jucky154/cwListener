@@ -81,8 +81,15 @@ func main() {
 		Power_ave_array[i] = Power_ave
 	}
 
-	pts := make(plotter.XYs, len_sound-ave_num)
-	for i, val := range Power_ave_array {
+	Power_diff := make([]float64, len_sound-ave_num-1)
+	for i := 0; i < len_sound-ave_num-1; i++ {
+		Power_diff[i] = (Power_ave_array[i+1] - Power_ave_array[i]) * float64(rate_sound)
+		// dt := float64(1.0)/float64(rate_sound)
+		// ~~/dt とは　* rate_sound と同じになる
+	}
+
+	pts := make(plotter.XYs, len_sound-ave_num-1)
+	for i, val := range Power_diff {
 		pts[i].X = float64(i) / float64(rate_sound)
 		pts[i].Y = val
 	}
@@ -93,7 +100,7 @@ func main() {
 	// 表示項目の設定
 	p.Title.Text = "sound"
 	p.X.Label.Text = "t"
-	p.Y.Label.Text = "power2"
+	p.Y.Label.Text = "power_diff"
 
 	err = plotutil.AddLinePoints(p, pts)
 	if err != nil {
@@ -102,7 +109,7 @@ func main() {
 
 	// 描画結果を保存
 	// "5*vg.Inch" の数値を変更すれば，保存する画像のサイズを調整できます．
-	if err := p.Save(10*vg.Inch, 3*vg.Inch, "power.png"); err != nil {
+	if err := p.Save(10*vg.Inch, 3*vg.Inch, "power_diff.png"); err != nil {
 		panic(err)
 	}
 }
