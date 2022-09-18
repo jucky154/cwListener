@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -107,4 +108,15 @@ func main() {
 		panic(err)
 	}
 
+	peakFreq := 0.0
+	peakPower := 0.0
+	for i, val := range Freq {
+		if val > 10 && val < 3000 {
+			if Power[i] > peakPower {
+				peakPower = Power[i]
+				peakFreq = val
+			}
+		}
+	}
+	fmt.Println(peakFreq)
 }
