@@ -1,10 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"math"
 	"os"
 
-	"github.com/mjibson/go-dsp/spectral"
 	"github.com/mjibson/go-dsp/wav"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
@@ -44,29 +45,32 @@ func main() {
 	for i, val := range SoundData {
 		SoundData64[i] = float64(val)
 	}
+	/*
+		var opt spectral.PwelchOptions
 
-	var opt spectral.PwelchOptions
+		opt.NFFT = 4096
+		opt.Noverlap = 1024
+		opt.Window = nil
+		opt.Pad = 4096
+		opt.Scale_off = false
 
-	opt.NFFT = 4096
-	opt.Noverlap = 1024
-	opt.Window = nil
-	opt.Pad = 4096
-	opt.Scale_off = false
+		Power, Freq := spectral.Pwelch(SoundData64, float64(rate_sound), &opt)
 
-	Power, Freq := spectral.Pwelch(SoundData64, float64(rate_sound), &opt)
-
-	peakFreq := 0.0
-	peakPower := 0.0
-	for i, val := range Freq {
-		if val > 10 && val < 3000 {
-			if Power[i] > peakPower {
-				peakPower = Power[i]
-				peakFreq = val
+		peakFreq := 0.0
+		peakPower := 0.0
+		for i, val := range Freq {
+			if val > 10 && val < 3000 {
+				if Power[i] > peakPower {
+					peakPower = Power[i]
+					peakFreq = val
+				}
 			}
 		}
-	}
+	*/
 
-	ave_num := int(rate_sound) / int(peakFreq)
+	ave_num := 5
+	cut_freq := 0.443 * float64(rate_sound) / math.Sqrt(float64(ave_num)*float64(ave_num)-1)
+	fmt.Println(cut_freq)
 	Power_ave_array := make([]float64, len_sound-ave_num)
 	Power_ave := float64(0.0)
 
@@ -106,6 +110,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	/*
+		p.X.Min = 0.15
+		p.X.Max = 0.25
+	*/
 
 	// 描画結果を保存
 	// "5*vg.Inch" の数値を変更すれば，保存する画像のサイズを調整できます．
