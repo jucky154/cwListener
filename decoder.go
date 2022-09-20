@@ -26,14 +26,16 @@ import (
 	"strings"
 	"fmt"
 	"github.com/mjibson/go-dsp/spectral"
-	"github.com/mjibson/go-dsp/wav"
+	"bytes"
+	"encoding/binary"
+	"github.com/gen2brain/malgo"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
 	"gonum.org/v1/plot/vg"
-	"log"
 	"math"
 	"os"
+	"time"
 )
 
 type XYs []XY
@@ -46,6 +48,8 @@ type XY struct {
 var morse string
 
 var cwtable = make(map[string]string)
+
+var samplingrate = 44100
 
 func Decode(signal []float64, interval float64) {
 	prev_up := 0
@@ -61,7 +65,7 @@ func Decode(signal []float64, interval float64) {
 				signalarr += " "
 			} else if span > 3 {
 				fmt.Println()
-				signalarr += ";"
+				signalarr += " ; "
 			}
 		} else if val == -1.0 {
 			prev_dn = i
@@ -204,23 +208,76 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	return peakFreq
 }
 
-func main() {
-	file, err := os.Open("JA1ZLO.wav")
+func record() []int16{
+	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
+		fmt.Printf("LOG <%v>\n", message)
+	})
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer func() {
+		_ = ctx.Uninit()
+		ctx.Free()
+	}()
+
+	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
+	deviceConfig.Capture.Format = malgo.FormatS16
+	deviceConfig.Capture.Channels = 1
+	deviceConfig.Playback.Format = malgo.FormatS16
+	deviceConfig.Playback.Channels = 1
+	deviceConfig.SampleRate = uint32(samplingrate)
+	deviceConfig.Alsa.NoMMap = 1
+
+	var capturedSampleCount uint32
+	pCapturedSamples := make([]byte, 0)
+
+	sizeInBytes := uint32(malgo.SampleSizeInBytes(deviceConfig.Capture.Format))
+	onRecvFrames := func(pSample2, pSample []byte, framecount uint32) {
+
+		sampleCount := framecount * deviceConfig.Capture.Channels * sizeInBytes
+
+		newCapturedSampleCount := capturedSampleCount + sampleCount
+
+		pCapturedSamples = append(pCapturedSamples, pSample...)
+
+		capturedSampleCount = newCapturedSampleCount
+
 	}
 
-	w, werr := wav.New(file)
-	if werr != nil {
-		log.Fatal(werr)
+	fmt.Println("Recording...")
+	captureCallbacks := malgo.DeviceCallbacks{
+		Data: onRecvFrames,
+	}
+	device, err := malgo.InitDevice(ctx.Context, deviceConfig, captureCallbacks)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
-	len_sound := w.Samples
-	rate_sound := w.SampleRate
-	SoundData, werr := w.ReadFloats(len_sound)
-	if werr != nil {
-		log.Fatal(werr)
+	err = device.Start()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
+
+	fmt.Println("stop recording after 10 seconds...")
+	time.Sleep(time.Second * 10)
+
+	device.Uninit()
+
+	Signalint := make([]int16, len(pCapturedSamples)/2)
+	buffer := bytes.NewReader(pCapturedSamples)
+	binary.Read(buffer, binary.LittleEndian, &Signalint)
+	
+	return Signalint
+}
+
+
+func main() {
+	SoundData := record()
+	len_sound := len(SoundData)
+	rate_sound := uint32(samplingrate)
 
 	Signal64 := make([]float64, len_sound)
 	SquaredSignal64 := make([]float64, len_sound)
@@ -231,6 +288,7 @@ func main() {
 
 	ave_num := 6 * int(float64(rate_sound)/PeakFreq(Signal64, rate_sound))
 	cut_freq := 0.443 * float64(rate_sound) / math.Sqrt(float64(ave_num)*float64(ave_num)-1)
+	fmt.Println("tone freq", PeakFreq(Signal64, rate_sound))
 	fmt.Println("cut_off", cut_freq)
 
 	smoothed := LPF(LPF(LPF(LPF(SquaredSignal64, ave_num), ave_num), ave_num), ave_num)
