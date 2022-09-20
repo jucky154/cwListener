@@ -29,6 +29,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/gen2brain/malgo"
+	"github.com/thoas/go-funk"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
@@ -123,6 +124,7 @@ func PeakValue(source []float64) float64 {
 
 func DetectEdges(threshold float64, source []float64) (result []float64, interval int) {
 	peak_value := PeakValue(source)
+	fmt.Println(peak_value)
 	threshold = peak_value * threshold
 
 	hold := 0
@@ -208,7 +210,7 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	return peakFreq
 }
 
-func record() []int16{
+func record() []int32{
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
 		fmt.Printf("LOG <%v>\n", message)
 	})
@@ -222,9 +224,9 @@ func record() []int16{
 	}()
 
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
-	deviceConfig.Capture.Format = malgo.FormatS16
+	deviceConfig.Capture.Format = malgo.FormatS32
 	deviceConfig.Capture.Channels = 1
-	deviceConfig.Playback.Format = malgo.FormatS16
+	deviceConfig.Playback.Format = malgo.FormatS32
 	deviceConfig.Playback.Channels = 1
 	deviceConfig.SampleRate = uint32(samplingrate)
 	deviceConfig.Alsa.NoMMap = 1
@@ -266,7 +268,7 @@ func record() []int16{
 
 	device.Uninit()
 
-	Signalint := make([]int16, len(pCapturedSamples)/2)
+	Signalint := make([]int32, len(pCapturedSamples)/4)
 	buffer := bytes.NewReader(pCapturedSamples)
 	binary.Read(buffer, binary.LittleEndian, &Signalint)
 	
@@ -281,19 +283,20 @@ func main() {
 
 	Signal64 := make([]float64, len_sound)
 	SquaredSignal64 := make([]float64, len_sound)
+	norm := float64(1.0)/float64(funk.MaxInt32(SoundData))
 	for i, val := range SoundData {
-		Signal64[i] = float64(val)
-		SquaredSignal64[i] = float64(val) * float64(val)
+		Signal64[i] = float64(val) *  norm
+		SquaredSignal64[i] = float64(val) * float64(val) * norm * norm
 	}
 
-	ave_num := 6 * int(float64(rate_sound)/PeakFreq(Signal64, rate_sound))
+	ave_num :=  6 * int(float64(rate_sound)/PeakFreq(Signal64, rate_sound))
 	cut_freq := 0.443 * float64(rate_sound) / math.Sqrt(float64(ave_num)*float64(ave_num)-1)
 	fmt.Println("tone freq", PeakFreq(Signal64, rate_sound))
 	fmt.Println("cut_off", cut_freq)
 
 	smoothed := LPF(LPF(LPF(LPF(SquaredSignal64, ave_num), ave_num), ave_num), ave_num)
 	diff := OneStepDiff(smoothed)
-	edge, interval := DetectEdges(0.9, diff)
+	edge, interval := DetectEdges(0.2, diff)
 
 	pts := make(plotter.XYs, len(smoothed))
 	pts_diff := make(plotter.XYs, len(diff))
