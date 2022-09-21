@@ -30,6 +30,7 @@ import (
 	"encoding/binary"
 	"github.com/gen2brain/malgo"
 	"github.com/thoas/go-funk"
+	"image/color"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
@@ -45,6 +46,10 @@ type XY struct {
 	X, Y float64
 }
 
+type Peak_XY struct {
+     X, Y int
+}
+
 //go:embed cwtable.dat
 var morse string
 
@@ -52,15 +57,15 @@ var cwtable = make(map[string]string)
 
 var samplingrate = 44100
 
-func Decode(signal []float64, interval float64) {
+func Decode(signal []Peak_XY, interval float64) string {
 	prev_up := 0
 	prev_dn := 0
 	signalarr := ""
 
-	for i, val := range signal {
-		if val == 1.0 {
-			prev_up = i
-			span := int(math.Round(float64(i-prev_dn) / interval))
+	for _, val := range signal {
+		if val.Y == 1.0 {
+			prev_up = val.X
+			span := int(math.Round(float64(val.X-prev_dn) / interval))
 			if span == 3 {
 				fmt.Print(" ")
 				signalarr += " "
@@ -68,9 +73,9 @@ func Decode(signal []float64, interval float64) {
 				fmt.Println()
 				signalarr += " ; "
 			}
-		} else if val == -1.0 {
-			prev_dn = i
-			span := int(math.Round(float64(i-prev_up) / interval))
+		} else if val.Y == -1.0 {
+			prev_dn = val.X
+			span := int(math.Round(float64(val.X-prev_up) / interval))
 			if span == 1 {
 				fmt.Print(".")
 				signalarr += "."
@@ -81,7 +86,7 @@ func Decode(signal []float64, interval float64) {
 		}
 	}
 	fmt.Println()
-	fmt.Println(morsedecode(signalarr))
+	return signalarr
 }
 
 func morsedecode(signalarr string) string {
@@ -122,37 +127,61 @@ func PeakValue(source []float64) float64 {
 	return peak
 }
 
-func DetectEdges(threshold float64, source []float64) (result []float64, interval int) {
-	peak_value := PeakValue(source)
-	fmt.Println(peak_value)
-	threshold = peak_value * threshold
+func DetectPeak(threshold float64, y []float64)(result []Peak_XY, interval int){
+     peak_value := PeakValue(y)
+     fmt.Println(peak_value)
+     delta := peak_value * threshold
+     
+     mn := float64(10000)
+     mx := float64(-10000)
+     var mnpos int
+     var mxpos int
+     result = make([]Peak_XY, 0)
+     var buf Peak_XY
 
-	hold := 0
-	count_start := 0
-	interval = len(source)
-	result = make([]float64, len(source))
+     lookformax := true
 
-	for i, val := range source {
-		if val > threshold && hold == 0 {
-			result[i] = 1.0
-			hold = 1
-			if i-count_start < interval {
-				interval = i - count_start
-			}
-			count_start = i
-		} else if val < -threshold && hold == 0 {
-			result[i] = -1.0
-			hold = -1
-			if i-count_start < interval {
-				interval = i - count_start
-			}
-			count_start = i
-		} else if -threshold < val && val < threshold {
-			hold = 0
-		}
+     for i, this := range(y) {
+     	 if this > mx {
+	    mx = this
+	    mxpos = i
+	 }
+	 
+	 if this < mn {
+	    mn = this
+	    mnpos = i
+	 }
+
+	 if lookformax {
+	    if this < mx - delta {
+	       buf.X = mxpos
+	       buf.Y = 1
+	       result = append(result, buf)
+	       mn = this
+	       mnpos = i
+	       lookformax = false
+	    }
+	  } else {
+	    if this > mn + delta {
+	       buf.X = mnpos
+	       buf.Y = -1
+	       result = append(result, buf)
+	       mx = this
+	       mxpos = i
+	       lookformax = true
+	    }
+	  }
 	}
 
-	return
+	interval = len(y)
+	count_start := 0
+	for _, val := range(result) {
+	    if val.X - count_start < interval {
+		interval = val.X - count_start
+	    }
+	    count_start = val.X
+	}
+	return 
 }
 
 func OneStepDiff(source []float64) (result []float64) {
@@ -296,7 +325,7 @@ func main() {
 
 	smoothed := LPF(LPF(LPF(LPF(SquaredSignal64, ave_num), ave_num), ave_num), ave_num)
 	diff := OneStepDiff(smoothed)
-	edge, interval := DetectEdges(0.2, diff)
+	edge, interval := DetectPeak(float64(0.5), diff)
 
 	pts := make(plotter.XYs, len(smoothed))
 	pts_diff := make(plotter.XYs, len(diff))
@@ -311,6 +340,33 @@ func main() {
 		pts_diff[i].Y = val
 	}
 
+	//ここからはピークの塗り潰し
+	cnt := 0
+	for _, val := range(edge) {
+	    if val.Y == 1 {
+	       cnt += 1
+	    }
+	}
+	
+	pts_peak_diff_min := make(plotter.XYs, len(edge) - cnt)
+	pts_peak_diff_max := make(plotter.XYs, cnt)
+	pts_peak_min := make(plotter.XYs, len(edge) - cnt)
+	pts_peak_max := make(plotter.XYs, cnt)
+	
+	cnt1 := 0
+	cnt2 := 0
+	for _, val := range(edge) {
+	    if val.Y == 1 {
+	       pts_peak_diff_max[cnt1] = pts_diff[val.X]
+	       pts_peak_max[cnt1] = pts[val.X]
+	       cnt1 += 1
+	    } else {
+	       pts_peak_diff_min[cnt2] = pts_diff[val.X]
+	       pts_peak_min[cnt2] = pts[val.X]
+	       cnt2 += 1
+	    }
+	}
+
 	p := plot.New()
 
 	p.Title.Text = "signal power"
@@ -318,6 +374,12 @@ func main() {
 	p.Y.Label.Text = "power"
 
 	plotutil.AddLines(p, pts)
+	p1, _  := plotter.NewScatter(pts_peak_max)
+	p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
+	p2, _  := plotter.NewScatter(pts_peak_min)
+	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
+	p.Add(p1)
+	p.Add(p2)
 	p.Save(10*vg.Inch, 3*vg.Inch, "smoothed.png")
 
 	p = plot.New()
@@ -327,7 +389,14 @@ func main() {
 	p.Y.Label.Text = "power diff"
 
 	plotutil.AddLines(p, pts_diff)
+	p1, _  = plotter.NewScatter(pts_peak_diff_max)
+	p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
+	p2, _  = plotter.NewScatter(pts_peak_diff_min)
+	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
+	p.Add(p1)
+	p.Add(p2)
 	p.Save(10*vg.Inch, 3*vg.Inch, "diff.png")
 
-	Decode(edge, float64(interval))
+	signalarr := Decode(edge, float64(interval))
+	fmt.Println(morsedecode(signalarr))
 }
