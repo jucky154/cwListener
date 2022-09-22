@@ -18,25 +18,31 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+/*
+This software includes the work that is distributed in the Apache License 2.0.
+"github.com/mash/gokmeans"
+*/
+
 package main
 
 import (
-       "bufio"
-	_ "embed"
-	"strings"
-	"fmt"
-	"github.com/mjibson/go-dsp/spectral"
+	"bufio"
 	"bytes"
+	_ "embed"
 	"encoding/binary"
+	"fmt"
 	"github.com/gen2brain/malgo"
+	"github.com/mash/gokmeans"
+	"github.com/mjibson/go-dsp/spectral"
 	"github.com/thoas/go-funk"
-	"image/color"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
 	"gonum.org/v1/plot/vg"
+	"image/color"
 	"math"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -47,7 +53,7 @@ type XY struct {
 }
 
 type Peak_XY struct {
-     X, Y int
+	X, Y int
 }
 
 //go:embed cwtable.dat
@@ -57,7 +63,74 @@ var cwtable = make(map[string]string)
 
 var samplingrate = 44100
 
-func Decode(signal []Peak_XY, interval float64) string {
+func Decode(signal []Peak_XY) string {
+	length_on_kmnode := make([]gokmeans.Node, 0)
+
+	//ピークはアルゴリズム的に極大スタート, 極大と極小は交互にくる, よって偶数番目にon（音あり）/奇数番目にoff（音無）が入る
+	length_onoff := make([]float64, len(signal)-1)
+	for i := 0; i < len(signal)-1; i++ {
+		length := float64(signal[i+1].X - signal[i].X)
+		length_onoff[i] = length
+
+		//signalが1→-1になるのがonの状態なので,signal.Yが-1のときon　そのときを抽出してk-meansのノードを作る
+		if signal[i+1].Y == -1 {
+			length_on_kmnode = append(length_on_kmnode, gokmeans.Node{length})
+		}
+	}
+
+	var interval float64
+	var long_index int
+	var short_index int
+
+	if success, centroids := gokmeans.Train(length_on_kmnode, 2, 50); success {
+		fmt.Println("k-means")
+		switch {
+		case centroids[1][0] > centroids[0][0]:
+			long_index = 1
+			short_index = 0
+			interval = centroids[0][0]
+		case centroids[1][0] < centroids[0][0]:
+			long_index = 0
+			short_index = 1
+			interval = centroids[1][0]
+		}
+
+		signalarr := ""
+		node_cnt := 0
+
+		for i := 0; i < len(signal)-1; i++ {
+			//音ありの時
+			if signal[i+1].Y == -1 {
+				switch gokmeans.Nearest(length_on_kmnode[node_cnt], centroids) {
+				case long_index:
+					signalarr += "_"
+					fmt.Print("_")
+				case short_index:
+					signalarr += "."
+					fmt.Print(".")
+				}
+				node_cnt += 1
+			} else {
+				//音無の時
+				span := int(math.Round(length_onoff[i] / interval))
+				if span == 3 {
+					fmt.Print(" ")
+					signalarr += " "
+				} else if span > 3 {
+					fmt.Println()
+					signalarr += " ; "
+				}
+			}
+		}
+		fmt.Println()
+		return signalarr
+	} else {
+		interval = funk.MaxFloat64(length_onoff)
+		return Decode_normal(signal, interval)
+	}
+}
+
+func Decode_normal(signal []Peak_XY, interval float64) string {
 	prev_up := 0
 	prev_dn := 0
 	signalarr := ""
@@ -90,7 +163,7 @@ func Decode(signal []Peak_XY, interval float64) string {
 }
 
 func morsedecode(signalarr string) string {
-     	reader := strings.NewReader(morse)
+	reader := strings.NewReader(morse)
 	stream := bufio.NewScanner(reader)
 	for stream.Scan() {
 		val := stream.Text()
@@ -98,7 +171,7 @@ func morsedecode(signalarr string) string {
 	}
 	cwtable[";"] = " "
 	cwtable[""] = " "
-	
+
 	cwarr := strings.Split(signalarr, " ")
 	cwstrarr := ""
 
@@ -127,61 +200,53 @@ func PeakValue(source []float64) float64 {
 	return peak
 }
 
-func DetectPeak(threshold float64, y []float64)(result []Peak_XY, interval int){
-     peak_value := PeakValue(y)
-     fmt.Println(peak_value)
-     delta := peak_value * threshold
-     
-     mn := float64(10000)
-     mx := float64(-10000)
-     var mnpos int
-     var mxpos int
-     result = make([]Peak_XY, 0)
-     var buf Peak_XY
+func DetectPeak(threshold float64, y []float64) (result []Peak_XY) {
+	peak_value := PeakValue(y)
+	fmt.Println(peak_value)
+	delta := peak_value * threshold
 
-     lookformax := true
+	mn := float64(10000)
+	mx := float64(-10000)
+	var mnpos int
+	var mxpos int
+	result = make([]Peak_XY, 0)
+	var buf Peak_XY
 
-     for i, this := range(y) {
-     	 if this > mx {
-	    mx = this
-	    mxpos = i
-	 }
-	 
-	 if this < mn {
-	    mn = this
-	    mnpos = i
-	 }
+	lookformax := true
 
-	 if lookformax {
-	    if this < mx - delta {
-	       buf.X = mxpos
-	       buf.Y = 1
-	       result = append(result, buf)
-	       mn = this
-	       mnpos = i
-	       lookformax = false
-	    }
-	  } else {
-	    if this > mn + delta {
-	       buf.X = mnpos
-	       buf.Y = -1
-	       result = append(result, buf)
-	       mx = this
-	       mxpos = i
-	       lookformax = true
-	    }
-	  }
+	for i, this := range y {
+		if this > mx {
+			mx = this
+			mxpos = i
+		}
+
+		if this < mn {
+			mn = this
+			mnpos = i
+		}
+
+		if lookformax {
+			if this < mx-delta {
+				buf.X = mxpos
+				buf.Y = 1
+				result = append(result, buf)
+				mn = this
+				mnpos = i
+				lookformax = false
+			}
+		} else {
+			if this > mn+delta {
+				buf.X = mnpos
+				buf.Y = -1
+				result = append(result, buf)
+				mx = this
+				mxpos = i
+				lookformax = true
+			}
+		}
 	}
 
-	interval = len(y)
-	count_start := 0
-	for _, val := range(result) {
-	    if val.X - count_start < interval {
-		interval = val.X - count_start
-	    }
-	    count_start = val.X
-	}
-	return 
+	return
 }
 
 func OneStepDiff(source []float64) (result []float64) {
@@ -239,7 +304,7 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	return peakFreq
 }
 
-func record() []int32{
+func record() []int32 {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
 		fmt.Printf("LOG <%v>\n", message)
 	})
@@ -300,10 +365,9 @@ func record() []int32{
 	Signalint := make([]int32, len(pCapturedSamples)/4)
 	buffer := bytes.NewReader(pCapturedSamples)
 	binary.Read(buffer, binary.LittleEndian, &Signalint)
-	
+
 	return Signalint
 }
-
 
 func main() {
 	SoundData := record()
@@ -312,20 +376,20 @@ func main() {
 
 	Signal64 := make([]float64, len_sound)
 	SquaredSignal64 := make([]float64, len_sound)
-	norm := float64(1.0)/float64(funk.MaxInt32(SoundData))
+	norm := float64(1.0) / float64(funk.MaxInt32(SoundData))
 	for i, val := range SoundData {
-		Signal64[i] = float64(val) *  norm
+		Signal64[i] = float64(val) * norm
 		SquaredSignal64[i] = float64(val) * float64(val) * norm * norm
 	}
 
-	ave_num :=  6 * int(float64(rate_sound)/PeakFreq(Signal64, rate_sound))
+	ave_num := 6 * int(float64(rate_sound)/PeakFreq(Signal64, rate_sound))
 	cut_freq := 0.443 * float64(rate_sound) / math.Sqrt(float64(ave_num)*float64(ave_num)-1)
 	fmt.Println("tone freq", PeakFreq(Signal64, rate_sound))
 	fmt.Println("cut_off", cut_freq)
 
 	smoothed := LPF(LPF(LPF(LPF(SquaredSignal64, ave_num), ave_num), ave_num), ave_num)
 	diff := OneStepDiff(smoothed)
-	edge, interval := DetectPeak(float64(0.5), diff)
+	edge := DetectPeak(float64(0.5), diff)
 
 	pts := make(plotter.XYs, len(smoothed))
 	pts_diff := make(plotter.XYs, len(diff))
@@ -342,29 +406,29 @@ func main() {
 
 	//ここからはピークの塗り潰し
 	cnt := 0
-	for _, val := range(edge) {
-	    if val.Y == 1 {
-	       cnt += 1
-	    }
+	for _, val := range edge {
+		if val.Y == 1 {
+			cnt += 1
+		}
 	}
-	
-	pts_peak_diff_min := make(plotter.XYs, len(edge) - cnt)
+
+	pts_peak_diff_min := make(plotter.XYs, len(edge)-cnt)
 	pts_peak_diff_max := make(plotter.XYs, cnt)
-	pts_peak_min := make(plotter.XYs, len(edge) - cnt)
+	pts_peak_min := make(plotter.XYs, len(edge)-cnt)
 	pts_peak_max := make(plotter.XYs, cnt)
-	
+
 	cnt1 := 0
 	cnt2 := 0
-	for _, val := range(edge) {
-	    if val.Y == 1 {
-	       pts_peak_diff_max[cnt1] = pts_diff[val.X]
-	       pts_peak_max[cnt1] = pts[val.X]
-	       cnt1 += 1
-	    } else {
-	       pts_peak_diff_min[cnt2] = pts_diff[val.X]
-	       pts_peak_min[cnt2] = pts[val.X]
-	       cnt2 += 1
-	    }
+	for _, val := range edge {
+		if val.Y == 1 {
+			pts_peak_diff_max[cnt1] = pts_diff[val.X]
+			pts_peak_max[cnt1] = pts[val.X]
+			cnt1 += 1
+		} else {
+			pts_peak_diff_min[cnt2] = pts_diff[val.X]
+			pts_peak_min[cnt2] = pts[val.X]
+			cnt2 += 1
+		}
 	}
 
 	p := plot.New()
@@ -374,9 +438,9 @@ func main() {
 	p.Y.Label.Text = "power"
 
 	plotutil.AddLines(p, pts)
-	p1, _  := plotter.NewScatter(pts_peak_max)
+	p1, _ := plotter.NewScatter(pts_peak_max)
 	p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
-	p2, _  := plotter.NewScatter(pts_peak_min)
+	p2, _ := plotter.NewScatter(pts_peak_min)
 	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
 	p.Add(p1)
 	p.Add(p2)
@@ -389,14 +453,14 @@ func main() {
 	p.Y.Label.Text = "power diff"
 
 	plotutil.AddLines(p, pts_diff)
-	p1, _  = plotter.NewScatter(pts_peak_diff_max)
+	p1, _ = plotter.NewScatter(pts_peak_diff_max)
 	p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
-	p2, _  = plotter.NewScatter(pts_peak_diff_min)
+	p2, _ = plotter.NewScatter(pts_peak_diff_min)
 	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
 	p.Add(p1)
 	p.Add(p2)
 	p.Save(10*vg.Inch, 3*vg.Inch, "diff.png")
 
-	signalarr := Decode(edge, float64(interval))
+	signalarr := Decode(edge)
 	fmt.Println(morsedecode(signalarr))
 }
