@@ -49,16 +49,16 @@ import (
 
 const (
 	CWLISTENER_NAME = "cwListener"
-	CWLISTENER_MENU = "MainForm.MainMenu.CwListenerMenu"
 )
 
 var (
-	form   *winc.Form
-	view   *winc.ImageView
-	pane   *winc.Panel
-	combo  *winc.ComboBox
-	combo2 *winc.ComboBox
-	combo3 *winc.ComboBox
+	form      *winc.Form
+	view      *winc.ImageView
+	pane      *winc.Panel
+	combo     *winc.ComboBox
+	combo2    *winc.ComboBox
+	combo3    *winc.ComboBox
+	combo2map = make(map[int]int)
 )
 
 //go:embed cwtable.dat
@@ -67,17 +67,17 @@ var morse string
 var cwtable = make(map[string]string)
 
 var (
-	deviceinfos []deviceinfostruct
+	deviceinfos  []deviceinfostruct
 	thresholdmap map[int]float64
 )
 
-type deviceinfostruct struct{
+type deviceinfostruct struct {
 	devicename string
-	deviceid unsafe.Pointer
-	maxsample uint32
-	minsample uint32
+	deviceid   unsafe.Pointer
+	maxsample  uint32
+	minsample  uint32
 }
-	
+
 func init() {
 	OnLaunchEvent = onLaunchEvent
 	winc.DllName = CWLISTENER_NAME
@@ -90,6 +90,12 @@ func onLaunchEvent() {
 	HandleButton("MainForm.MainMenu.PlugincwListenerWindow", func(num int) {
 		createWindow()
 	})
+}
+
+func trimnullstr(str string) string {
+	b := []byte(str)
+	convert := string(bytes.Trim(b[:], "\x00"))
+	return convert
 }
 
 func makecwtable() {
@@ -148,7 +154,7 @@ func createWindow() {
 		form.SetIcon(0, icon)
 	}
 
-	form.SetSize(1200, 300)
+	form.SetSize(1000, 500)
 
 	form.EnableSizable(false)
 	form.EnableMaxButton(false)
@@ -167,34 +173,29 @@ func createWindow() {
 	combo = winc.NewComboBox(form)
 	availabledevices := availabledevice()
 	for i, val := range availabledevices {
-		combo.InsertItem(i, val.devicename)
+		combo.InsertItem(i, trimnullstr(val.devicename))
 	}
 	combo.SetSelectedItem(0)
-	combolabel := winc.NewLabel(combo)
-	combolabel.SetText("入力装置")
 
 	combo2 = winc.NewComboBox(form)
-	for i := 5; i < 21; i++ {
-		combo2.InsertItem(i, strconv.Itoa(i))
+	for i := 0; i < 16; i++ {
+		combo2map[i] = i + 5
+		combo2.InsertItem(i, "録音時間"+strconv.Itoa(i+5)+"秒")
 	}
-	combo2.SetSelectedItem(10)
-	combo2label := winc.NewLabel(combo2)
-	combo2label.SetText("録音時間")
+	combo2.SetSelectedItem(5)
 
 	combo3 = winc.NewComboBox(form)
 	thresholdmap = make(map[int]float64)
-	for i := 1; i < 9; i++ {
-		combo3.InsertItem(i, strconv.Itoa(i))
-		thresholdmap[i] = float64(i)*float64(0.1)
+	for i := 0; i < 8; i++ {
+		combo3.InsertItem(i, "閾値レベル"+strconv.Itoa(i+1))
+		thresholdmap[i] = float64(i+1) * float64(0.1)
 	}
-	combo3.SetSelectedItem(5)
-	combo3label := winc.NewLabel(combo3)
-	combo3label.SetText("閾値レベル")
+	combo3.SetSelectedItem(4)
 
 	btn := winc.NewPushButton(form)
 	btn.SetText("録音&解析")
 	btn.OnClick().Bind(func(e *winc.Event) {
-		update()
+		go update(availabledevices)
 	})
 
 	dock := winc.NewSimpleDock(form)
@@ -203,7 +204,7 @@ func createWindow() {
 	dock.Dock(combo3, winc.Top)
 	dock.Dock(btn, winc.Top)
 	dock.Dock(pane, winc.Fill)
-	 
+
 	form.Show()
 	return
 }
@@ -225,10 +226,12 @@ type Peak_XY struct {
 	X, Y int
 }
 
-func update() {
-	SoundData := record()
+func update(availabledevices []deviceinfostruct) {
+	maxsample := availabledevices[combo.SelectedItem()].maxsample
+	minsample := availabledevices[combo.SelectedItem()].minsample
+	rate_sound := samplingrate(maxsample, minsample)
+	SoundData := record(availabledevices, rate_sound)
 	len_sound := len(SoundData)
-	rate_sound := samplingrate(combo.SelectedItem())
 
 	Signal64 := make([]float64, len_sound)
 	SquaredSignal64 := make([]float64, len_sound)
@@ -306,14 +309,14 @@ func update() {
 	pane.Invalidate(true)
 }
 
-func samplingrate(itemid int)(sample uint32) {
+func samplingrate(maxsample uint32, minsample uint32) (sample uint32) {
 	sample = uint32(44100)
-	if deviceinfos[itemid].maxsample < uint32(44100) {
-		sample = deviceinfos[itemid].maxsample
-	} 
-	if  deviceinfos[itemid].minsample > uint32(44100){
-		sample = deviceinfos[itemid].minsample
-	} 
+	if int(maxsample) < 44100 {
+		sample = maxsample
+	}
+	if int(minsample) > 44100 {
+		sample = minsample
+	}
 	return
 }
 
@@ -371,9 +374,11 @@ func Decode(signal []Peak_XY) string {
 				}
 			}
 		}
+		DisplayToast(signalarr)
 		return signalarr
 	} else {
-		interval = funk.MaxFloat64(length_onoff)
+		DisplayToast("解析精度の低い解析です")
+		interval = funk.MinFloat64(length_onoff)
 		return Decode_normal(signal, interval)
 	}
 }
@@ -546,7 +551,7 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	return peakFreq
 }
 
-func record() []int32 {
+func record(availabledevices []deviceinfostruct, samplerate uint32) []int32 {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
 		DisplayToast(message)
 	})
@@ -563,8 +568,8 @@ func record() []int32 {
 	deviceConfig.Capture.Channels = 1
 	deviceConfig.Playback.Format = malgo.FormatS32
 	deviceConfig.Playback.Channels = 1
-	deviceConfig.SampleRate = samplingrate(combo.SelectedItem())
-	deviceConfig.Capture.DeviceID = deviceinfos[combo.SelectedItem()].deviceid
+	deviceConfig.SampleRate = samplerate
+	deviceConfig.Capture.DeviceID = availabledevices[combo.SelectedItem()].deviceid
 	deviceConfig.Alsa.NoMMap = 1
 
 	var capturedSampleCount uint32
@@ -596,7 +601,7 @@ func record() []int32 {
 		DisplayToast(err.Error())
 	}
 
-	time.Sleep(time.Second * time.Duration(combo2.SelectedItem()))
+	time.Sleep(time.Second * time.Duration(combo2map[combo2.SelectedItem()]))
 
 	device.Uninit()
 
