@@ -67,12 +67,17 @@ var morse string
 var cwtable = make(map[string]string)
 
 var (
-	devicemap    map[int]unsafe.Pointer
-	maxsamplemap map[int]uint32
-	minsamplemap map[int]uint32
+	deviceinfos []deviceinfostruct
 	thresholdmap map[int]float64
 )
 
+type deviceinfostruct struct{
+	devicename string
+	deviceid unsafe.Pointer
+	maxsample uint32
+	minsample uint32
+}
+	
 func init() {
 	OnLaunchEvent = onLaunchEvent
 	winc.DllName = CWLISTENER_NAME
@@ -98,7 +103,7 @@ func makecwtable() {
 	cwtable[""] = " "
 }
 
-func availabledevice() (resultid []int, resultstring []string) {
+func availabledevice() (deviceinfos []deviceinfostruct) {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
 		DisplayToast(message)
 	})
@@ -117,22 +122,19 @@ func availabledevice() (resultid []int, resultstring []string) {
 		DisplayToast(err.Error())
 	}
 
-	devicemap = make(map[int]unsafe.Pointer)
-	maxsamplemap = make(map[int]uint32)
-	minsamplemap = make(map[int]uint32)
-	resultid = make([]int, 0)
-	resultstring = make([]string, 0)
+	deviceinfos = make([]deviceinfostruct, 0)
+	var deviceinfo deviceinfostruct
 
-	for i, info := range infos {
+	for _, info := range infos {
 		full, err := ctx.DeviceInfo(malgo.Capture, info.ID, malgo.Shared)
 		if err != nil {
 			DisplayToast(info.Name() + " is " + err.Error())
 		} else {
-			devicemap[i] = info.ID.Pointer()
-			maxsamplemap[i] = full.MaxSampleRate
-			minsamplemap[i] = full.MaxChannels
-			resultid = append(resultid, i)
-			resultstring = append(resultstring, info.Name())
+			deviceinfo.devicename = info.Name()
+			deviceinfo.deviceid = info.ID.Pointer()
+			deviceinfo.maxsample = full.MaxSampleRate
+			deviceinfo.minsample = full.MaxChannels
+			deviceinfos = append(deviceinfos, deviceinfo)
 		}
 	}
 	return
@@ -163,11 +165,11 @@ func createWindow() {
 	form.OnClose().Bind(closeWindow)
 
 	combo = winc.NewComboBox(form)
-	deviceid, devicename := availabledevice()
-	for i, val := range deviceid {
-		combo.InsertItem(val, devicename[i])
+	availabledevices := availabledevice()
+	for i, val := range availabledevices {
+		combo.InsertItem(i, val.devicename)
 	}
-	combo.SetSelectedItem(deviceid[0])
+	combo.SetSelectedItem(0)
 	combolabel := winc.NewLabel(combo)
 	combolabel.SetText("入力装置")
 
@@ -196,11 +198,11 @@ func createWindow() {
 	})
 
 	dock := winc.NewSimpleDock(form)
-	dock.Dock(pane, winc.Fill)
 	dock.Dock(combo, winc.Top)
 	dock.Dock(combo2, winc.Top)
 	dock.Dock(combo3, winc.Top)
 	dock.Dock(btn, winc.Top)
+	dock.Dock(pane, winc.Fill)
 	 
 	form.Show()
 	return
@@ -306,11 +308,11 @@ func update() {
 
 func samplingrate(itemid int)(sample uint32) {
 	sample = uint32(44100)
-	if maxsamplemap[itemid] < uint32(44100) {
-		sample = maxsamplemap[itemid]
+	if deviceinfos[itemid].maxsample < uint32(44100) {
+		sample = deviceinfos[itemid].maxsample
 	} 
-	if minsamplemap[itemid] > uint32(44100){
-		sample = minsamplemap[itemid]
+	if  deviceinfos[itemid].minsample > uint32(44100){
+		sample = deviceinfos[itemid].minsample
 	} 
 	return
 }
@@ -562,7 +564,7 @@ func record() []int32 {
 	deviceConfig.Playback.Format = malgo.FormatS32
 	deviceConfig.Playback.Channels = 1
 	deviceConfig.SampleRate = samplingrate(combo.SelectedItem())
-	deviceConfig.Capture.DeviceID = devicemap[combo.SelectedItem()]
+	deviceConfig.Capture.DeviceID = deviceinfos[combo.SelectedItem()].deviceid
 	deviceConfig.Alsa.NoMMap = 1
 
 	var capturedSampleCount uint32
