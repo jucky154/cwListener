@@ -366,15 +366,14 @@ func Decode(signal []Peak_XY) string {
 				node_cnt += 1
 			} else {
 				//音無の時
-				span := int(math.Round(length_onoff[i] / interval))
-				if span == 3 {
+				switch gokmeans.Nearest(gokmeans.Node{length_onoff[i] },  centroids) {
+				case long_index:
 					signalarr += " "
-				} else if span > 3 {
-					signalarr += " ; "
+				case short_index:
+					signalarr = signalarr
 				}
 			}
 		}
-		DisplayToast(signalarr)
 		return signalarr
 	} else {
 		DisplayToast("解析精度の低い解析です")
