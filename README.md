@@ -41,4 +41,4 @@ Feel free to contact [@nextzlog](https://twitter.com/nextzlog) on Twitter.
 
 ### Clauses
 - MIT
-このプラグインは一部Apacheライセンスver2のライブラリを使用しています
+- このプラグインは一部Apacheライセンスver2のライブラリを使用しています
