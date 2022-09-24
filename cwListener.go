@@ -267,7 +267,7 @@ func closeWindow(arg *winc.Event){
 	x, y := form.Pos()
 	SetINI(CWLISTENER_NAME, "x", strconv.Itoa(x))
 	SetINI(CWLISTENER_NAME, "y", strconv.Itoa(y))
-	abort <- struct{}{}
+	close(abort)
 	form.Close()
 }
 
