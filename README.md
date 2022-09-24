@@ -1,7 +1,8 @@
 # CW解読プラグイン
 
 ![image](https://img.shields.io/badge/Go-1.17-red.svg)
-このプラグインは自動的に
+
+このプラグインは自動的にモールス信号を解析します
 
 ## Releases
 
