@@ -1,5 +1,4 @@
 # CW解読プラグイン
-====
 
 ![image](https://img.shields.io/badge/Go-1.17-red.svg)
 このプラグインは自動的に
