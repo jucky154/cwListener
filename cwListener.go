@@ -66,8 +66,11 @@ var morse string
 
 var cwtable = make(map[string]string)
 
+var abort	chan struct{}
+
 var (
 	deviceinfos  []deviceinfostruct
+	availabledevices []deviceinfostruct
 	thresholdmap map[int]float64
 )
 
@@ -76,6 +79,29 @@ type deviceinfostruct struct {
 	deviceid   unsafe.Pointer
 	maxsample  uint32
 	minsample  uint32
+}
+
+type CWView struct {
+	list *winc.ListView
+}
+
+var cwview CWView
+
+type CWItem struct {
+	level string
+	morseresult	string
+}
+
+var cwitemarr []CWItem
+
+func (item CWItem) Text() (text []string){
+	text = append(text, item.level)
+	text = append(text, item.morseresult)
+	return
+}
+
+func (item CWItem) ImageIndex() int{
+	return 0
 }
 
 func init() {
@@ -168,10 +194,9 @@ func createWindow() {
 	}
 	pane = winc.NewPanel(form)
 	view = winc.NewImageView(pane)
-	form.OnClose().Bind(closeWindow)
 
 	combo = winc.NewComboBox(form)
-	availabledevices := availabledevice()
+	availabledevices = availabledevice()
 	for i, val := range availabledevices {
 		combo.InsertItem(i, trimnullstr(val.devicename))
 	}
@@ -192,27 +217,57 @@ func createWindow() {
 	}
 	combo3.SetSelectedItem(4)
 
-	btn := winc.NewPushButton(form)
-	btn.SetText("録音&解析")
-	btn.OnClick().Bind(func(e *winc.Event) {
-		go update(availabledevices)
-	})
+	cwview.list = winc.NewListView(form)
+	cwview.list.EnableEditLabels(false)
+	cwview.list.AddColumn("解析精度", 100)
+	cwview.list.AddColumn("解析結果", 200)
+
+	cwitemarr = make([]CWItem, 3)
+	for i := 0; i < len(cwitemarr); i++ {
+		cwitemarr[i].level = "none"
+		cwitemarr[i].morseresult = "未解析"
+	} 
+
+	for _, val := range cwitemarr {
+		cwview.list.AddItem(val)
+		
+	}
 
 	dock := winc.NewSimpleDock(form)
 	dock.Dock(combo, winc.Top)
 	dock.Dock(combo2, winc.Top)
 	dock.Dock(combo3, winc.Top)
-	dock.Dock(btn, winc.Top)
+	dock.Dock(cwview.list, winc.Left)
 	dock.Dock(pane, winc.Fill)
 
 	form.Show()
+
+	abort = make(chan struct{})
+	go forloop()
+
+
+	form.OnClose().Bind(closeWindow)
+
+
 	return
 }
 
-func closeWindow(arg *winc.Event) {
+func forloop(){
+	for{
+		select {
+		case <- abort :
+			return
+		default :
+			update()
+		}
+	}
+}
+
+func closeWindow(arg *winc.Event){
 	x, y := form.Pos()
 	SetINI(CWLISTENER_NAME, "x", strconv.Itoa(x))
 	SetINI(CWLISTENER_NAME, "y", strconv.Itoa(y))
+	abort <- struct{}{}
 	form.Close()
 }
 
@@ -226,11 +281,12 @@ type Peak_XY struct {
 	X, Y int
 }
 
-func update(availabledevices []deviceinfostruct) {
-	maxsample := availabledevices[combo.SelectedItem()].maxsample
-	minsample := availabledevices[combo.SelectedItem()].minsample
+func update() {
+	combonum := combo.SelectedItem() 
+	maxsample := availabledevices[combonum].maxsample
+	minsample := availabledevices[combonum].minsample
 	rate_sound := samplingrate(maxsample, minsample)
-	SoundData := record(availabledevices, rate_sound)
+	SoundData := record(rate_sound, combonum)
 	len_sound := len(SoundData)
 
 	Signal64 := make([]float64, len_sound)
@@ -247,66 +303,81 @@ func update(availabledevices []deviceinfostruct) {
 	diff := OneStepDiff(smoothed)
 	edge := DetectPeak(thresholdmap[combo3.SelectedItem()], diff)
 
-	signalarr := Decode(edge)
+	signalarr, morselevel := Decode(edge)
 	morsestrings := morsedecode(signalarr)
-
-	pts := make(plotter.XYs, len(smoothed))
-	pts_diff := make(plotter.XYs, len(diff))
-
-	for i, val := range smoothed {
-		pts[i].X = float64(i) / float64(rate_sound)
-		pts[i].Y = val
+	
+	cwitemarr[0] = cwitemarr[1] 
+	cwitemarr[1] = cwitemarr[2] 
+	cwitemarr[2] = CWItem{
+		level : morselevel, 
+		morseresult : morsestrings,
 	}
 
-	for i, val := range diff {
-		pts_diff[i].X = float64(i) / float64(rate_sound)
-		pts_diff[i].Y = val
-	}
-
-	//ここからはピークの塗り潰し
-	cnt := 0
-	for _, val := range edge {
-		if val.Y == 1 {
-			cnt += 1
+	if form.Visible() {
+		cwview.list.DeleteAllItems()
+		
+		for _, val := range cwitemarr {
+			cwview.list.AddItem(val)
 		}
-	}
 
-	pts_peak_diff_min := make(plotter.XYs, len(edge)-cnt)
-	pts_peak_diff_max := make(plotter.XYs, cnt)
-	pts_peak_min := make(plotter.XYs, len(edge)-cnt)
-	pts_peak_max := make(plotter.XYs, cnt)
+		pts := make(plotter.XYs, len(smoothed))
+		pts_diff := make(plotter.XYs, len(diff))
 
-	cnt1 := 0
-	cnt2 := 0
-	for _, val := range edge {
-		if val.Y == 1 {
-			pts_peak_diff_max[cnt1] = pts_diff[val.X]
-			pts_peak_max[cnt1] = pts[val.X]
-			cnt1 += 1
-		} else {
-			pts_peak_diff_min[cnt2] = pts_diff[val.X]
-			pts_peak_min[cnt2] = pts[val.X]
-			cnt2 += 1
+		for i, val := range smoothed {
+			pts[i].X = float64(i) / float64(rate_sound)
+			pts[i].Y = val
 		}
+
+		for i, val := range diff {
+			pts_diff[i].X = float64(i) / float64(rate_sound)
+			pts_diff[i].Y = val
+		}
+
+		//ここからはピークの塗り潰し
+		cnt := 0
+		for _, val := range edge {
+			if val.Y == 1 {
+				cnt += 1
+		}
+		}
+
+		pts_peak_diff_min := make(plotter.XYs, len(edge)-cnt)
+		pts_peak_diff_max := make(plotter.XYs, cnt)
+		pts_peak_min := make(plotter.XYs, len(edge)-cnt)
+		pts_peak_max := make(plotter.XYs, cnt)
+
+		cnt1 := 0
+		cnt2 := 0
+		for _, val := range edge {
+			if val.Y == 1 {
+				pts_peak_diff_max[cnt1] = pts_diff[val.X]
+				pts_peak_max[cnt1] = pts[val.X]
+				cnt1 += 1
+			} else {
+				pts_peak_diff_min[cnt2] = pts_diff[val.X]
+				pts_peak_min[cnt2] = pts[val.X]
+				cnt2 += 1
+			}
+		}
+
+		p := plot.New()
+
+		p.Title.Text = morsestrings
+		p.X.Label.Text = "t"
+		p.Y.Label.Text = "power"
+
+		plotutil.AddLines(p, pts)
+		p1, _ := plotter.NewScatter(pts_peak_max)
+		p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
+		p2, _ := plotter.NewScatter(pts_peak_min)
+		p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
+		p.Add(p1)
+		p.Add(p2)
+		p.Save(10*vg.Inch, 3*vg.Inch, "smoothed.png")
+
+		view.DrawImageFile("smoothed.png")
+		pane.Invalidate(true)
 	}
-
-	p := plot.New()
-
-	p.Title.Text = morsestrings
-	p.X.Label.Text = "t"
-	p.Y.Label.Text = "power"
-
-	plotutil.AddLines(p, pts)
-	p1, _ := plotter.NewScatter(pts_peak_max)
-	p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
-	p2, _ := plotter.NewScatter(pts_peak_min)
-	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
-	p.Add(p1)
-	p.Add(p2)
-	p.Save(10*vg.Inch, 3*vg.Inch, "smoothed.png")
-
-	view.DrawImageFile("smoothed.png")
-	pane.Invalidate(true)
 }
 
 func samplingrate(maxsample uint32, minsample uint32) (sample uint32) {
@@ -320,7 +391,7 @@ func samplingrate(maxsample uint32, minsample uint32) (sample uint32) {
 	return
 }
 
-func Decode(signal []Peak_XY) string {
+func Decode(signal []Peak_XY) (string, string) {
 	length_on_kmnode := make([]gokmeans.Node, 0)
 
 	//ピークはアルゴリズム的に極大スタート, 極大と極小は交互にくる, よって偶数番目にon（音あり）/奇数番目にoff（音無）が入る
@@ -374,11 +445,10 @@ func Decode(signal []Peak_XY) string {
 				}
 			}
 		}
-		return signalarr
+		return signalarr, "High"
 	} else {
-		DisplayToast("解析精度の低い解析です")
 		interval = funk.MinFloat64(length_onoff)
-		return Decode_normal(signal, interval)
+		return Decode_normal(signal, interval), "Low"
 	}
 }
 
@@ -539,7 +609,7 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	peakFreq := 0.0
 	peakPower := 0.0
 	for i, val := range Freq {
-		if val > 10 && val < 3000 {
+		if val > 100 && val < 3000 {
 			if Power[i] > peakPower {
 				peakPower = Power[i]
 				peakFreq = val
@@ -550,7 +620,7 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	return peakFreq
 }
 
-func record(availabledevices []deviceinfostruct, samplerate uint32) []int32 {
+func record(samplerate uint32, machinenum int) []int32 {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
 		DisplayToast(message)
 	})
@@ -568,7 +638,7 @@ func record(availabledevices []deviceinfostruct, samplerate uint32) []int32 {
 	deviceConfig.Playback.Format = malgo.FormatS32
 	deviceConfig.Playback.Channels = 1
 	deviceConfig.SampleRate = samplerate
-	deviceConfig.Capture.DeviceID = availabledevices[combo.SelectedItem()].deviceid
+	deviceConfig.Capture.DeviceID = availabledevices[machinenum].deviceid
 	deviceConfig.Alsa.NoMMap = 1
 
 	var capturedSampleCount uint32
@@ -600,7 +670,8 @@ func record(availabledevices []deviceinfostruct, samplerate uint32) []int32 {
 		DisplayToast(err.Error())
 	}
 
-	time.Sleep(time.Second * time.Duration(combo2map[combo2.SelectedItem()]))
+	combo2num := combo2.SelectedItem()
+	time.Sleep(time.Second * time.Duration(combo2map[combo2num]))
 
 	device.Uninit()
 
