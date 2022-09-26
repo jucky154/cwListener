@@ -66,12 +66,12 @@ var morse string
 
 var cwtable = make(map[string]string)
 
-var abort	chan struct{}
+var abort chan struct{}
 
 var (
-	deviceinfos  []deviceinfostruct
+	deviceinfos      []deviceinfostruct
 	availabledevices []deviceinfostruct
-	thresholdmap map[int]float64
+	thresholdmap     map[int]float64
 )
 
 type deviceinfostruct struct {
@@ -88,19 +88,19 @@ type CWView struct {
 var cwview CWView
 
 type CWItem struct {
-	level string
-	morseresult	string
+	level       string
+	morseresult string
 }
 
 var cwitemarr []CWItem
 
-func (item CWItem) Text() (text []string){
+func (item CWItem) Text() (text []string) {
 	text = append(text, item.level)
 	text = append(text, item.morseresult)
 	return
 }
 
-func (item CWItem) ImageIndex() int{
+func (item CWItem) ImageIndex() int {
 	return 0
 }
 
@@ -226,11 +226,11 @@ func createWindow() {
 	for i := 0; i < len(cwitemarr); i++ {
 		cwitemarr[i].level = "none"
 		cwitemarr[i].morseresult = "未解析"
-	} 
+	}
 
 	for _, val := range cwitemarr {
 		cwview.list.AddItem(val)
-		
+
 	}
 
 	dock := winc.NewSimpleDock(form)
@@ -245,25 +245,23 @@ func createWindow() {
 	abort = make(chan struct{})
 	go forloop()
 
-
 	form.OnClose().Bind(closeWindow)
-
 
 	return
 }
 
-func forloop(){
-	for{
+func forloop() {
+	for {
 		select {
-		case <- abort :
+		case <-abort:
 			return
-		default :
+		default:
 			update()
 		}
 	}
 }
 
-func closeWindow(arg *winc.Event){
+func closeWindow(arg *winc.Event) {
 	x, y := form.Pos()
 	SetINI(CWLISTENER_NAME, "x", strconv.Itoa(x))
 	SetINI(CWLISTENER_NAME, "y", strconv.Itoa(y))
@@ -282,12 +280,23 @@ type Peak_XY struct {
 }
 
 func update() {
-	combonum := combo.SelectedItem() 
+	combonum := combo.SelectedItem()
 	maxsample := availabledevices[combonum].maxsample
 	minsample := availabledevices[combonum].minsample
 	rate_sound := samplingrate(maxsample, minsample)
-	SoundData := record(rate_sound, combonum)
+	SoundData, err := record(rate_sound, combonum)
 	len_sound := len(SoundData)
+
+	if err != nil {
+		DisplayModal("録音において問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
+		close(abort)
+		return
+	}
+
+	if funk.MaxInt32(SoundData) == int32(0) {
+		listupdate("none", "無音")
+		return
+	}
 
 	Signal64 := make([]float64, len_sound)
 	SquaredSignal64 := make([]float64, len_sound)
@@ -305,79 +314,79 @@ func update() {
 
 	signalarr, morselevel := Decode(edge)
 	morsestrings := morsedecode(signalarr)
-	
-	cwitemarr[0] = cwitemarr[1] 
-	cwitemarr[1] = cwitemarr[2] 
-	cwitemarr[2] = CWItem{
-		level : morselevel, 
-		morseresult : morsestrings,
-	}
 
 	if form.Visible() {
-		cwview.list.DeleteAllItems()
-		
-		for _, val := range cwitemarr {
-			cwview.list.AddItem(val)
-		}
-
-		pts := make(plotter.XYs, len(smoothed))
-		pts_diff := make(plotter.XYs, len(diff))
-
-		for i, val := range smoothed {
-			pts[i].X = float64(i) / float64(rate_sound)
-			pts[i].Y = val
-		}
-
-		for i, val := range diff {
-			pts_diff[i].X = float64(i) / float64(rate_sound)
-			pts_diff[i].Y = val
-		}
-
-		//ここからはピークの塗り潰し
-		cnt := 0
-		for _, val := range edge {
-			if val.Y == 1 {
-				cnt += 1
-		}
-		}
-
-		pts_peak_diff_min := make(plotter.XYs, len(edge)-cnt)
-		pts_peak_diff_max := make(plotter.XYs, cnt)
-		pts_peak_min := make(plotter.XYs, len(edge)-cnt)
-		pts_peak_max := make(plotter.XYs, cnt)
-
-		cnt1 := 0
-		cnt2 := 0
-		for _, val := range edge {
-			if val.Y == 1 {
-				pts_peak_diff_max[cnt1] = pts_diff[val.X]
-				pts_peak_max[cnt1] = pts[val.X]
-				cnt1 += 1
-			} else {
-				pts_peak_diff_min[cnt2] = pts_diff[val.X]
-				pts_peak_min[cnt2] = pts[val.X]
-				cnt2 += 1
-			}
-		}
-
-		p := plot.New()
-
-		p.Title.Text = morsestrings
-		p.X.Label.Text = "t"
-		p.Y.Label.Text = "power"
-
-		plotutil.AddLines(p, pts)
-		p1, _ := plotter.NewScatter(pts_peak_max)
-		p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
-		p2, _ := plotter.NewScatter(pts_peak_min)
-		p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
-		p.Add(p1)
-		p.Add(p2)
-		p.Save(10*vg.Inch, 3*vg.Inch, "smoothed.png")
-
-		view.DrawImageFile("smoothed.png")
-		pane.Invalidate(true)
+		listupdate(morselevel, morsestrings)
+		picupdate(smoothed, edge, rate_sound, morsestrings)
 	}
+}
+
+func listupdate(morselevel string, morsestrings string) {
+	cwitemarr[0] = cwitemarr[1]
+	cwitemarr[1] = cwitemarr[2]
+	cwitemarr[2] = CWItem{
+		level:       morselevel,
+		morseresult: morsestrings,
+	}
+
+	cwview.list.DeleteAllItems()
+
+	for _, val := range cwitemarr {
+		cwview.list.AddItem(val)
+	}
+	return
+}
+
+func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32, morsestrings string) {
+	pts := make(plotter.XYs, len(smoothed))
+
+	for i, val := range smoothed {
+		pts[i].X = float64(i) / float64(rate_sound)
+		pts[i].Y = val
+	}
+
+	//ここからはピークの塗り潰し
+	cnt := 0
+	for _, val := range edge {
+		if val.Y == 1 {
+			cnt += 1
+		}
+	}
+
+	pts_peak_min := make(plotter.XYs, len(edge)-cnt)
+	pts_peak_max := make(plotter.XYs, cnt)
+
+	cnt1 := 0
+	cnt2 := 0
+	for _, val := range edge {
+		if val.Y == 1 {
+			pts_peak_max[cnt1] = pts[val.X]
+			cnt1 += 1
+		} else {
+			pts_peak_min[cnt2] = pts[val.X]
+			cnt2 += 1
+		}
+	}
+
+	p := plot.New()
+
+	p.Title.Text = morsestrings
+	p.X.Label.Text = "t"
+	p.Y.Label.Text = "power"
+
+	plotutil.AddLines(p, pts)
+	p1, _ := plotter.NewScatter(pts_peak_max)
+	p1.GlyphStyle.Color = color.RGBA{R: 255, B: 128, A: 55} // 緑
+	p2, _ := plotter.NewScatter(pts_peak_min)
+	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
+	p.Add(p1)
+	p.Add(p2)
+	p.Save(10*vg.Inch, 3*vg.Inch, "smoothed.png")
+
+	view.DrawImageFile("smoothed.png")
+	pane.Invalidate(true)
+
+	return
 }
 
 func samplingrate(maxsample uint32, minsample uint32) (sample uint32) {
@@ -437,7 +446,7 @@ func Decode(signal []Peak_XY) (string, string) {
 				node_cnt += 1
 			} else {
 				//音無の時
-				switch gokmeans.Nearest(gokmeans.Node{length_onoff[i] },  centroids) {
+				switch gokmeans.Nearest(gokmeans.Node{length_onoff[i]}, centroids) {
 				case long_index:
 					signalarr += " "
 				case short_index:
@@ -620,13 +629,17 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	return peakFreq
 }
 
-func record(samplerate uint32, machinenum int) []int32 {
+func record(samplerate uint32, machinenum int) ([]int32, error) {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
 		DisplayToast(message)
 	})
 	if err != nil {
 		DisplayToast(err.Error())
+		err_result := make([]int32, 0)
+		return err_result, err
+
 	}
+
 	defer func() {
 		_ = ctx.Uninit()
 		ctx.Free()
@@ -663,11 +676,15 @@ func record(samplerate uint32, machinenum int) []int32 {
 	device, err := malgo.InitDevice(ctx.Context, deviceConfig, captureCallbacks)
 	if err != nil {
 		DisplayToast(err.Error())
+		err_result := make([]int32, 0)
+		return err_result, err
 	}
 
 	err = device.Start()
 	if err != nil {
 		DisplayToast(err.Error())
+		err_result := make([]int32, 0)
+		return err_result, err
 	}
 
 	combo2num := combo2.SelectedItem()
@@ -679,5 +696,5 @@ func record(samplerate uint32, machinenum int) []int32 {
 	buffer := bytes.NewReader(pCapturedSamples)
 	binary.Read(buffer, binary.LittleEndian, &Signalint)
 
-	return Signalint
+	return Signalint, err
 }
