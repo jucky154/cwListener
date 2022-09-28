@@ -28,6 +28,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"container/ring"
 	_ "embed"
 	"encoding/binary"
 	"github.com/gen2brain/malgo"
@@ -43,22 +44,20 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 	"unsafe"
 )
 
 const (
 	CWLISTENER_NAME = "cwListener"
+	recordtime      = 0.8
 )
 
 var (
-	form      *winc.Form
-	view      *winc.ImageView
-	pane      *winc.Panel
-	combo     *winc.ComboBox
-	combo2    *winc.ComboBox
-	combo3    *winc.ComboBox
-	combo2map = make(map[int]int)
+	form   *winc.Form
+	view   *winc.ImageView
+	pane   *winc.Panel
+	combo  *winc.ComboBox
+	combo3 *winc.ComboBox
 )
 
 //go:embed cwtable.dat
@@ -72,6 +71,8 @@ var (
 	deviceinfos      []deviceinfostruct
 	availabledevices []deviceinfostruct
 	thresholdmap     map[int]float64
+	device           *malgo.Device
+	ctx              *malgo.AllocatedContext
 )
 
 type deviceinfostruct struct {
@@ -93,6 +94,15 @@ type CWItem struct {
 }
 
 var cwitemarr []CWItem
+
+// constがないのでvarで対応
+var opt = spectral.PwelchOptions{
+	NFFT:      4096,
+	Noverlap:  1024,
+	Window:    nil,
+	Pad:       4096,
+	Scale_off: false,
+}
 
 func (item CWItem) Text() (text []string) {
 	text = append(text, item.level)
@@ -201,13 +211,11 @@ func createWindow() {
 		combo.InsertItem(i, trimnullstr(val.devicename))
 	}
 	combo.SetSelectedItem(0)
-
-	combo2 = winc.NewComboBox(form)
-	for i := 0; i < 16; i++ {
-		combo2map[i] = i + 5
-		combo2.InsertItem(i, "録音時間"+strconv.Itoa(i+5)+"秒")
-	}
-	combo2.SetSelectedItem(5)
+	combo.OnSelectedChange().Bind(func(e *winc.Event) {
+		_ = ctx.Uninit()
+		ctx.Free()
+		initdevice()
+	})
 
 	combo3 = winc.NewComboBox(form)
 	thresholdmap = make(map[int]float64)
@@ -235,37 +243,24 @@ func createWindow() {
 
 	dock := winc.NewSimpleDock(form)
 	dock.Dock(combo, winc.Top)
-	dock.Dock(combo2, winc.Top)
 	dock.Dock(combo3, winc.Top)
 	dock.Dock(cwview.list, winc.Left)
 	dock.Dock(pane, winc.Fill)
 
+	initdevice()
 	form.Show()
-
-	abort = make(chan struct{})
-	go forloop()
 
 	form.OnClose().Bind(closeWindow)
 
 	return
 }
 
-func forloop() {
-	for {
-		select {
-		case <-abort:
-			return
-		default:
-			update()
-		}
-	}
-}
-
 func closeWindow(arg *winc.Event) {
 	x, y := form.Pos()
 	SetINI(CWLISTENER_NAME, "x", strconv.Itoa(x))
 	SetINI(CWLISTENER_NAME, "y", strconv.Itoa(y))
-	close(abort)
+	_ = ctx.Uninit()
+	ctx.Free()
 	form.Close()
 }
 
@@ -279,22 +274,9 @@ type Peak_XY struct {
 	X, Y int
 }
 
-func update() {
-	combonum := combo.SelectedItem()
-	maxsample := availabledevices[combonum].maxsample
-	minsample := availabledevices[combonum].minsample
-	rate_sound := samplingrate(maxsample, minsample)
-	SoundData, err := record(rate_sound, combonum)
+func decode_main(SoundData []int32, rate_sound uint32) {
 	len_sound := len(SoundData)
-
-	if err != nil {
-		DisplayModal("録音において問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
-		close(abort)
-		return
-	}
-
-	if funk.MaxInt32(SoundData) == int32(0) {
-		listupdate("none", "無音")
+	if len_sound == 0 {
 		return
 	}
 
@@ -317,7 +299,7 @@ func update() {
 
 	if form.Visible() {
 		listupdate(morselevel, morsestrings)
-		picupdate(smoothed, edge, rate_sound, morsestrings)
+		//picupdate(smoothed, edge, rate_sound,  morsestrings)
 	}
 }
 
@@ -605,20 +587,12 @@ func LPF(source []float64, n int) (result []float64) {
 }
 
 func PeakFreq(signal []float64, sampling_freq uint32) float64 {
-	var opt spectral.PwelchOptions
-
-	opt.NFFT = 4096
-	opt.Noverlap = 1024
-	opt.Window = nil
-	opt.Pad = 4096
-	opt.Scale_off = false
-
 	Power, Freq := spectral.Pwelch(signal, float64(sampling_freq), &opt)
 
 	peakFreq := 0.0
 	peakPower := 0.0
 	for i, val := range Freq {
-		if val > 100 && val < 3000 {
+		if val > 200 && val < 2000 {
 			if Power[i] > peakPower {
 				peakPower = Power[i]
 				peakFreq = val
@@ -629,72 +603,112 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	return peakFreq
 }
 
-func record(samplerate uint32, machinenum int) ([]int32, error) {
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
-		DisplayToast(message)
-	})
-	if err != nil {
-		DisplayToast(err.Error())
-		err_result := make([]int32, 0)
-		return err_result, err
+func initdevice() {
+	var err error
+	machinenum := combo.SelectedItem()
+	maxsample := availabledevices[machinenum].maxsample
+	minsample := availabledevices[machinenum].minsample
+	rate_sound := samplingrate(maxsample, minsample)
 
-	}
+	ctx, err = malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
+		DisplayToast(message)
+		return
+	})
 
 	defer func() {
 		_ = ctx.Uninit()
 		ctx.Free()
 	}()
 
+	if err != nil {
+		DisplayModal("機器の初期化中に問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
+		DisplayToast(err.Error())
+		return
+
+	}
+
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
 	deviceConfig.Capture.Format = malgo.FormatS32
 	deviceConfig.Capture.Channels = 1
 	deviceConfig.Playback.Format = malgo.FormatS32
 	deviceConfig.Playback.Channels = 1
-	deviceConfig.SampleRate = samplerate
+	deviceConfig.SampleRate = rate_sound
 	deviceConfig.Capture.DeviceID = availabledevices[machinenum].deviceid
 	deviceConfig.Alsa.NoMMap = 1
 
-	var capturedSampleCount uint32
-	pCapturedSamples := make([]byte, 0)
+	pCapturedSamples := make([]int32, 0)
 
-	sizeInBytes := uint32(malgo.SampleSizeInBytes(deviceConfig.Capture.Format))
+	length_ring := int(float64(rate_sound) * float64(recordtime))
+	ringbuffer := ring.New(length_ring)
+	for i := 0; i < length_ring; i++ {
+		ringbuffer.Value = float64(0)
+		ringbuffer = ringbuffer.Next()
+	}
 	onRecvFrames := func(pSample2, pSample []byte, framecount uint32) {
+		Signalint := make([]int32, framecount)
+		buffer := bytes.NewReader(pSample)
+		binary.Read(buffer, binary.LittleEndian, &Signalint)
+		for _, val := range Signalint {
+			ringbuffer.Value = float64(val)
+			ringbuffer = ringbuffer.Next()
+		}
 
-		sampleCount := framecount * deviceConfig.Capture.Channels * sizeInBytes
-
-		newCapturedSampleCount := capturedSampleCount + sampleCount
-
-		pCapturedSamples = append(pCapturedSamples, pSample...)
-
-		capturedSampleCount = newCapturedSampleCount
-
+		if IsSilent(ringbuffer, rate_sound) {
+			go decode_main(pCapturedSamples, rate_sound)
+			pCapturedSamples = make([]int32, 0)
+		} else {
+			pCapturedSamples = append(pCapturedSamples, Signalint...)
+		}
 	}
 
 	captureCallbacks := malgo.DeviceCallbacks{
 		Data: onRecvFrames,
 	}
-	device, err := malgo.InitDevice(ctx.Context, deviceConfig, captureCallbacks)
+	device, err = malgo.InitDevice(ctx.Context, deviceConfig, captureCallbacks)
 	if err != nil {
+		DisplayModal("機器の初期化中に問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
 		DisplayToast(err.Error())
-		err_result := make([]int32, 0)
-		return err_result, err
+		return
 	}
 
 	err = device.Start()
 	if err != nil {
+		DisplayModal("機器のスタート時に問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
 		DisplayToast(err.Error())
-		err_result := make([]int32, 0)
-		return err_result, err
+		return
+	}
+}
+
+func IsSilent(ringbuffer *ring.Ring, sampling_freq uint32) bool {
+	len_buffer := ringbuffer.Len()
+	buffer_float64 := make([]float64, len_buffer)
+	for i := 0; i < len_buffer; i++ {
+		//取り出すときにぐるっと一周してしまえば問題ない
+		buffer_float64[i] = ringbuffer.Value.(float64)
+		ringbuffer = ringbuffer.Next()
 	}
 
-	combo2num := combo2.SelectedItem()
-	time.Sleep(time.Second * time.Duration(combo2map[combo2num]))
+	Power, Freq := spectral.Pwelch(buffer_float64, float64(sampling_freq), &opt)
 
-	device.Uninit()
+	peakPower := 0.0
+	lowPower := float64(math.Pow(2, 32))
+	for i, val := range Freq {
+		if val > 200 && val < 2000 {
+			if Power[i] > peakPower {
+				peakPower = Power[i]
+			}
+			if Power[i] < lowPower {
+				lowPower = Power[i]
+			}
+		}
+	}
 
-	Signalint := make([]int32, len(pCapturedSamples)/4)
-	buffer := bytes.NewReader(pCapturedSamples)
-	binary.Read(buffer, binary.LittleEndian, &Signalint)
-
-	return Signalint, err
+	switch {
+	case lowPower/peakPower > 0.5:
+		return true
+	case peakPower == 0 && lowPower == 0:
+		return true
+	default:
+		return false
+	}
 }
