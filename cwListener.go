@@ -28,7 +28,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"container/ring"
 	_ "embed"
 	"encoding/binary"
 	"github.com/gen2brain/malgo"
@@ -45,19 +44,20 @@ import (
 	"strconv"
 	"strings"
 	"unsafe"
+	"container/ring"
 )
 
 const (
 	CWLISTENER_NAME = "cwListener"
-	recordtime      = 0.8
+	recordtime = 0.8
 )
 
 var (
-	form   *winc.Form
-	view   *winc.ImageView
-	pane   *winc.Panel
-	combo  *winc.ComboBox
-	combo3 *winc.ComboBox
+	form      *winc.Form
+	view      *winc.ImageView
+	pane      *winc.Panel
+	combo     *winc.ComboBox
+	combo3    *winc.ComboBox
 )
 
 //go:embed cwtable.dat
@@ -65,14 +65,14 @@ var morse string
 
 var cwtable = make(map[string]string)
 
-var abort chan struct{}
+var abort	chan struct{}
 
 var (
-	deviceinfos      []deviceinfostruct
+	deviceinfos  []deviceinfostruct
 	availabledevices []deviceinfostruct
-	thresholdmap     map[int]float64
-	device           *malgo.Device
-	ctx              *malgo.AllocatedContext
+	thresholdmap map[int]float64
+	device *malgo.Device
+	ctx *malgo.AllocatedContext 
 )
 
 type deviceinfostruct struct {
@@ -89,28 +89,28 @@ type CWView struct {
 var cwview CWView
 
 type CWItem struct {
-	level       string
-	morseresult string
+	level string
+	morseresult	string
 }
 
 var cwitemarr []CWItem
 
-// constがないのでvarで対応
+//constがないのでvarで対応
 var opt = spectral.PwelchOptions{
-	NFFT:      4096,
-	Noverlap:  1024,
-	Window:    nil,
-	Pad:       4096,
-	Scale_off: false,
+	NFFT : 4096, 
+	Noverlap : 1024,
+	Window : nil,
+	Pad : 4096,
+	Scale_off : false,
 }
 
-func (item CWItem) Text() (text []string) {
+func (item CWItem) Text() (text []string){
 	text = append(text, item.level)
 	text = append(text, item.morseresult)
 	return
 }
 
-func (item CWItem) ImageIndex() int {
+func (item CWItem) ImageIndex() int{
 	return 0
 }
 
@@ -190,7 +190,7 @@ func createWindow() {
 		form.SetIcon(0, icon)
 	}
 
-	form.SetSize(1000, 500)
+	form.SetSize(1200, 500)
 
 	form.EnableSizable(false)
 	form.EnableMaxButton(false)
@@ -211,11 +211,12 @@ func createWindow() {
 		combo.InsertItem(i, trimnullstr(val.devicename))
 	}
 	combo.SetSelectedItem(0)
-	combo.OnSelectedChange().Bind(func(e *winc.Event) {
+	combo.OnSelectedChange().Bind(func(e *winc.Event){
 		_ = ctx.Uninit()
 		ctx.Free()
 		initdevice()
 	})
+
 
 	combo3 = winc.NewComboBox(form)
 	thresholdmap = make(map[int]float64)
@@ -234,11 +235,11 @@ func createWindow() {
 	for i := 0; i < len(cwitemarr); i++ {
 		cwitemarr[i].level = "none"
 		cwitemarr[i].morseresult = "未解析"
-	}
+	} 
 
 	for _, val := range cwitemarr {
 		cwview.list.AddItem(val)
-
+		
 	}
 
 	dock := winc.NewSimpleDock(form)
@@ -252,10 +253,11 @@ func createWindow() {
 
 	form.OnClose().Bind(closeWindow)
 
+
 	return
 }
 
-func closeWindow(arg *winc.Event) {
+func closeWindow(arg *winc.Event){
 	x, y := form.Pos()
 	SetINI(CWLISTENER_NAME, "x", strconv.Itoa(x))
 	SetINI(CWLISTENER_NAME, "y", strconv.Itoa(y))
@@ -276,7 +278,7 @@ type Peak_XY struct {
 
 func decode_main(SoundData []int32, rate_sound uint32) {
 	len_sound := len(SoundData)
-	if len_sound == 0 {
+	if len_sound == 0{
 		return
 	}
 
@@ -299,33 +301,34 @@ func decode_main(SoundData []int32, rate_sound uint32) {
 
 	if form.Visible() {
 		listupdate(morselevel, morsestrings)
-		//picupdate(smoothed, edge, rate_sound,  morsestrings)
+		picupdate(smoothed, edge, rate_sound,  morsestrings)
 	}
 }
 
-func listupdate(morselevel string, morsestrings string) {
-	cwitemarr[0] = cwitemarr[1]
-	cwitemarr[1] = cwitemarr[2]
+func listupdate(morselevel string, morsestrings string){
+	cwitemarr[0] = cwitemarr[1] 
+	cwitemarr[1] = cwitemarr[2] 
 	cwitemarr[2] = CWItem{
-		level:       morselevel,
-		morseresult: morsestrings,
+		level : morselevel, 
+		morseresult : morsestrings,
 	}
 
 	cwview.list.DeleteAllItems()
-
+		
 	for _, val := range cwitemarr {
 		cwview.list.AddItem(val)
 	}
 	return
 }
 
-func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32, morsestrings string) {
+func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32,  morsestrings string){
 	pts := make(plotter.XYs, len(smoothed))
 
 	for i, val := range smoothed {
 		pts[i].X = float64(i) / float64(rate_sound)
 		pts[i].Y = val
 	}
+
 
 	//ここからはピークの塗り潰し
 	cnt := 0
@@ -370,6 +373,7 @@ func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32, morsestrin
 
 	return
 }
+	
 
 func samplingrate(maxsample uint32, minsample uint32) (sample uint32) {
 	sample = uint32(44100)
@@ -428,7 +432,7 @@ func Decode(signal []Peak_XY) (string, string) {
 				node_cnt += 1
 			} else {
 				//音無の時
-				switch gokmeans.Nearest(gokmeans.Node{length_onoff[i]}, centroids) {
+				switch gokmeans.Nearest(gokmeans.Node{length_onoff[i] },  centroids) {
 				case long_index:
 					signalarr += " "
 				case short_index:
@@ -588,7 +592,6 @@ func LPF(source []float64, n int) (result []float64) {
 
 func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 	Power, Freq := spectral.Pwelch(signal, float64(sampling_freq), &opt)
-
 	peakFreq := 0.0
 	peakPower := 0.0
 	for i, val := range Freq {
@@ -599,13 +602,12 @@ func PeakFreq(signal []float64, sampling_freq uint32) float64 {
 			}
 		}
 	}
-
 	return peakFreq
 }
 
-func initdevice() {
+func initdevice(){
 	var err error
-	machinenum := combo.SelectedItem()
+	machinenum := combo.SelectedItem() 
 	maxsample := availabledevices[machinenum].maxsample
 	minsample := availabledevices[machinenum].minsample
 	rate_sound := samplingrate(maxsample, minsample)
@@ -624,7 +626,7 @@ func initdevice() {
 		DisplayModal("機器の初期化中に問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
 		DisplayToast(err.Error())
 		return
-
+		
 	}
 
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
@@ -635,15 +637,18 @@ func initdevice() {
 	deviceConfig.SampleRate = rate_sound
 	deviceConfig.Capture.DeviceID = availabledevices[machinenum].deviceid
 	deviceConfig.Alsa.NoMMap = 1
+	deviceConfig.PeriodSizeInMilliseconds = uint32(float64(recordtime) * float64(1000))
 
 	pCapturedSamples := make([]int32, 0)
 
 	length_ring := int(float64(rate_sound) * float64(recordtime))
 	ringbuffer := ring.New(length_ring)
+	buffer_int32 := make([]int32, length_ring)
 	for i := 0; i < length_ring; i++ {
 		ringbuffer.Value = float64(0)
 		ringbuffer = ringbuffer.Next()
 	}
+
 	onRecvFrames := func(pSample2, pSample []byte, framecount uint32) {
 		Signalint := make([]int32, framecount)
 		buffer := bytes.NewReader(pSample)
@@ -654,8 +659,16 @@ func initdevice() {
 		}
 
 		if IsSilent(ringbuffer, rate_sound) {
-			go decode_main(pCapturedSamples, rate_sound)
+			// 録音データが入っているかどうかのif
+			if len(pCapturedSamples) > length_ring {
+				go decode_main(pCapturedSamples, rate_sound)
+			}
 			pCapturedSamples = make([]int32, 0)
+			for i := 0; i < length_ring; i++ {
+		        	 buffer_int32[i] = int32(ringbuffer.Value.(float64))
+		        	 ringbuffer = ringbuffer.Next()
+			}
+			pCapturedSamples = append(pCapturedSamples, buffer_int32...)
 		} else {
 			pCapturedSamples = append(pCapturedSamples, Signalint...)
 		}
@@ -668,7 +681,7 @@ func initdevice() {
 	if err != nil {
 		DisplayModal("機器の初期化中に問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
 		DisplayToast(err.Error())
-		return
+		return 
 	}
 
 	err = device.Start()
@@ -680,9 +693,9 @@ func initdevice() {
 }
 
 func IsSilent(ringbuffer *ring.Ring, sampling_freq uint32) bool {
-	len_buffer := ringbuffer.Len()
-	buffer_float64 := make([]float64, len_buffer)
-	for i := 0; i < len_buffer; i++ {
+	len_buffer:=  ringbuffer.Len()
+        buffer_float64 := make([]float64, len_buffer)
+	for i := 0;  i < len_buffer; i++{
 		//取り出すときにぐるっと一周してしまえば問題ない
 		buffer_float64[i] = ringbuffer.Value.(float64)
 		ringbuffer = ringbuffer.Next()
@@ -690,25 +703,27 @@ func IsSilent(ringbuffer *ring.Ring, sampling_freq uint32) bool {
 
 	Power, Freq := spectral.Pwelch(buffer_float64, float64(sampling_freq), &opt)
 
+	mean := 0.0
+	cnt := 0
 	peakPower := 0.0
-	lowPower := float64(math.Pow(2, 32))
 	for i, val := range Freq {
 		if val > 200 && val < 2000 {
+			mean += Power[i]
+			cnt += 1
 			if Power[i] > peakPower {
 				peakPower = Power[i]
-			}
-			if Power[i] < lowPower {
-				lowPower = Power[i]
 			}
 		}
 	}
 
-	switch {
-	case lowPower/peakPower > 0.5:
+	mean = mean/float64(cnt)
+
+        switch{
+	case  peakPower / mean < 10.0 :
 		return true
-	case peakPower == 0 && lowPower == 0:
+	case peakPower == 0 :
 		return true
-	default:
+	default :
 		return false
 	}
 }
