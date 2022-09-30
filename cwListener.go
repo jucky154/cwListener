@@ -28,41 +28,41 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"container/ring"
 	_ "embed"
 	"encoding/binary"
 	"github.com/gen2brain/malgo"
 	"github.com/jg1vpp/winc"
 	"github.com/mash/gokmeans"
 	"github.com/mjibson/go-dsp/spectral"
-	"github.com/thoas/go-funk"
 	"github.com/moutend/go-equalizer/pkg/equalizer"
+	"github.com/thoas/go-funk"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
 	"gonum.org/v1/plot/vg"
 	"image/color"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
-	"sort"
 	"unsafe"
-	"container/ring"
 )
 
 const (
-	CWLISTENER_NAME = "cwListener"
-	recordtime = 0.8 //リングバッファの時間
+	CWLISTENER_NAME  = "cwListener"
+	recordtime       = 0.8 //リングバッファの時間
 	limit_recordtime = 3.0 //解析に回る最低限の時間
-	fft_peak_delta = 0.3
-	bandpass_width = 0.2
+	fft_peak_delta   = 0.3
+	bandpass_width   = 0.2
 )
 
 var (
-	form      *winc.Form
-	view      *winc.ImageView
-	pane      *winc.Panel
-	combo     *winc.ComboBox
-	combo3    *winc.ComboBox
+	form   *winc.Form
+	view   *winc.ImageView
+	pane   *winc.Panel
+	combo  *winc.ComboBox
+	combo3 *winc.ComboBox
 )
 
 //go:embed cwtable.dat
@@ -71,11 +71,11 @@ var morse string
 var cwtable = make(map[string]string)
 
 var (
-	deviceinfos  []deviceinfostruct
+	deviceinfos      []deviceinfostruct
 	availabledevices []deviceinfostruct
-	thresholdmap map[int]float64
-	device *malgo.Device
-	ctx *malgo.AllocatedContext 
+	thresholdmap     map[int]float64
+	device           *malgo.Device
+	ctx              *malgo.AllocatedContext
 )
 
 type deviceinfostruct struct {
@@ -85,13 +85,13 @@ type deviceinfostruct struct {
 	minsample  uint32
 }
 
-//constがないのでvarで対応
+// constがないのでvarで対応
 var opt = spectral.PwelchOptions{
-	NFFT : 4096, 
-	Noverlap : 1024,
-	Window : nil,
-	Pad : 4096,
-	Scale_off : false,
+	NFFT:      4096,
+	Noverlap:  1024,
+	Window:    nil,
+	Pad:       4096,
+	Scale_off: false,
 }
 
 type CWView struct {
@@ -101,17 +101,17 @@ type CWView struct {
 var cwview CWView
 
 type CWItem struct {
-	freq1 string
+	freq1        string
 	morseresult1 string
-	freq2 string
+	freq2        string
 	morseresult2 string
-	freq3 string
+	freq3        string
 	morseresult3 string
 }
 
 var cwitemarr []CWItem
 
-func (item CWItem) Text() (text []string){
+func (item CWItem) Text() (text []string) {
 	text = append(text, item.freq1)
 	text = append(text, item.morseresult1)
 	text = append(text, item.freq2)
@@ -121,7 +121,7 @@ func (item CWItem) Text() (text []string){
 	return
 }
 
-func (item CWItem) ImageIndex() int{
+func (item CWItem) ImageIndex() int {
 	return 0
 }
 
@@ -222,12 +222,11 @@ func createWindow() {
 		combo.InsertItem(i, trimnullstr(val.devicename))
 	}
 	combo.SetSelectedItem(0)
-	combo.OnSelectedChange().Bind(func(e *winc.Event){
+	combo.OnSelectedChange().Bind(func(e *winc.Event) {
 		_ = ctx.Uninit()
 		ctx.Free()
 		initdevice()
 	})
-
 
 	combo3 = winc.NewComboBox(form)
 	thresholdmap = make(map[int]float64)
@@ -239,7 +238,7 @@ func createWindow() {
 
 	cwview.list = winc.NewListView(form)
 	cwview.list.EnableEditLabels(false)
-	for i := 0 ; i < 3 ; i ++ {
+	for i := 0; i < 3; i++ {
 		cwview.list.AddColumn("解析周波数", 100)
 		cwview.list.AddColumn("解析結果", 200)
 	}
@@ -252,11 +251,11 @@ func createWindow() {
 		cwitemarr[i].morseresult2 = "未解析"
 		cwitemarr[i].freq3 = "-"
 		cwitemarr[i].morseresult3 = "未解析"
-	} 
+	}
 
 	for _, val := range cwitemarr {
 		cwview.list.AddItem(val)
-		
+
 	}
 
 	dock := winc.NewSimpleDock(form)
@@ -270,11 +269,10 @@ func createWindow() {
 
 	form.OnClose().Bind(closeWindow)
 
-
 	return
 }
 
-func closeWindow(arg *winc.Event){
+func closeWindow(arg *winc.Event) {
 	x, y := form.Pos()
 	SetINI(CWLISTENER_NAME, "x", strconv.Itoa(x))
 	SetINI(CWLISTENER_NAME, "y", strconv.Itoa(y))
@@ -304,7 +302,7 @@ func decode_main(SoundData []int32, rate_sound uint32) {
 	len_sound := len(SoundData)
 
 	//無音で回ってきたら何もしない
-	if funk.MaxInt32(SoundData) == 0{
+	if funk.MaxInt32(SoundData) == 0 {
 		return
 	}
 
@@ -323,30 +321,28 @@ func decode_main(SoundData []int32, rate_sound uint32) {
 	}
 
 	cwitems := CWItem{
-		freq1 : "-" , 
-		morseresult1 : "none", 
-		freq2 : "-", 
-		morseresult2 : "none",
-		freq3 : "-",
-		morseresult3 : "none",
+		freq1:        "-",
+		morseresult1: "none",
+		freq2:        "-",
+		morseresult2: "none",
+		freq3:        "-",
+		morseresult3: "none",
 	}
 
-
-	for i := 0 ; i < min(len(fft_peak), 3); i++{
+	for i := 0; i < min(len(fft_peak), 3); i++ {
 		fft_peak_freq := freqarr[fft_peak[i].index]
 		bpf_cfg := BPF_config{
-			samplerate : float64(rate_sound), 
-			freq	   : fft_peak_freq, 
-			width	   : float64(bandpass_width),
+			samplerate: float64(rate_sound),
+			freq:       fft_peak_freq,
+			width:      float64(bandpass_width),
 		}
 
-
-		Signal64 := BPF(BPF(BPF(BPF(BPF(souce_arr, bpf_cfg), bpf_cfg),bpf_cfg),bpf_cfg),bpf_cfg)
+		Signal64 := BPF(BPF(BPF(BPF(BPF(souce_arr, bpf_cfg), bpf_cfg), bpf_cfg), bpf_cfg), bpf_cfg)
 
 		ave_num := 6 * int(float64(rate_sound)/fft_peak_freq)
 
 		SquaredSignal64 := make([]float64, len(Signal64))
-		for i, val := range(Signal64){
+		for i, val := range Signal64 {
 			SquaredSignal64[i] = val * val
 		}
 
@@ -356,50 +352,49 @@ func decode_main(SoundData []int32, rate_sound uint32) {
 
 		signalarr := Decode(edge)
 		morsestrings := morsedecode(signalarr)
-		freqstr :=  strconv.Itoa(int(fft_peak_freq))
+		freqstr := strconv.Itoa(int(fft_peak_freq))
 
 		switch i + 1 {
-		case 1 : 
+		case 1:
 			cwitems.freq1 = freqstr
 			cwitems.morseresult1 = morsestrings
-		case 2 : 
+		case 2:
 			cwitems.freq2 = freqstr
 			cwitems.morseresult2 = morsestrings
-		case 3 : 
+		case 3:
 			cwitems.freq3 = freqstr
 			cwitems.morseresult3 = morsestrings
 		}
 
 		if form.Visible() {
-			picupdate(smoothed, edge, rate_sound,  morsestrings, i)
-			if  min(len(fft_peak), 3) == i+1{
+			picupdate(smoothed, edge, rate_sound, morsestrings, i)
+			if min(len(fft_peak), 3) == i+1 {
 				listupdate(cwitems)
 			}
-		}	
+		}
 	}
 }
 
-func listupdate(cwitems CWItem){
-	cwitemarr[0] = cwitemarr[1] 
-	cwitemarr[1] = cwitemarr[2] 
+func listupdate(cwitems CWItem) {
+	cwitemarr[0] = cwitemarr[1]
+	cwitemarr[1] = cwitemarr[2]
 	cwitemarr[2] = cwitems
 
 	cwview.list.DeleteAllItems()
-		
+
 	for _, val := range cwitemarr {
 		cwview.list.AddItem(val)
 	}
 	return
 }
 
-func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32,  morsestrings string, index int){
+func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32, morsestrings string, index int) {
 	pts := make(plotter.XYs, len(smoothed))
 
 	for i, val := range smoothed {
 		pts[i].X = float64(i) / float64(rate_sound)
 		pts[i].Y = val
 	}
-
 
 	//ここからはピークの塗り潰し
 	cnt := 0
@@ -437,14 +432,13 @@ func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32,  morsestri
 	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
 	p.Add(p1)
 	p.Add(p2)
-	p.Save(10*vg.Inch, 3*vg.Inch, "smoothed" + strconv.Itoa(index) + ".png")
+	p.Save(10*vg.Inch, 3*vg.Inch, "smoothed"+strconv.Itoa(index)+".png")
 
 	view.DrawImageFile("smoothed" + strconv.Itoa(index) + ".png")
 	pane.Invalidate(true)
 
 	return
 }
-	
 
 func samplingrate(maxsample uint32, minsample uint32) (sample uint32) {
 	sample = uint32(44100)
@@ -503,7 +497,7 @@ func Decode(signal []Peak_XY) string {
 				node_cnt += 1
 			} else {
 				//音無の時
-				switch gokmeans.Nearest(gokmeans.Node{length_onoff[i] },  centroids) {
+				switch gokmeans.Nearest(gokmeans.Node{length_onoff[i]}, centroids) {
 				case long_index:
 					signalarr += " "
 				case short_index:
@@ -661,7 +655,7 @@ func LPF(source []float64, n int) (result []float64) {
 	return
 }
 
-func PeakFreq(signal []float64, sampling_freq uint32)([]float64, []float64) {
+func PeakFreq(signal []float64, sampling_freq uint32) ([]float64, []float64) {
 	Power, Freq := spectral.Pwelch(signal, float64(sampling_freq), &opt)
 
 	peakPower := 0.0
@@ -669,8 +663,8 @@ func PeakFreq(signal []float64, sampling_freq uint32)([]float64, []float64) {
 	freqarr := make([]float64, 0)
 	for i, val := range Freq {
 		if val > 200 && val < 2000 {
-		       powerarr = append(powerarr, Power[i])
-		       freqarr = append(freqarr, val)
+			powerarr = append(powerarr, Power[i])
+			freqarr = append(freqarr, val)
 			if Power[i] > peakPower {
 				peakPower = Power[i]
 			}
@@ -681,30 +675,29 @@ func PeakFreq(signal []float64, sampling_freq uint32)([]float64, []float64) {
 }
 
 type BPF_config struct {
-     samplerate float64
-     freq	float64
-     width	float64
+	samplerate float64
+	freq       float64
+	width      float64
 }
 
-func BPF(input []float64, bpf_cfg BPF_config) []float64{
-     output := make([]float64, len(input))
-     bpf := equalizer.NewBandPass(bpf_cfg.samplerate, bpf_cfg.freq, bpf_cfg.width)
+func BPF(input []float64, bpf_cfg BPF_config) []float64 {
+	output := make([]float64, len(input))
+	bpf := equalizer.NewBandPass(bpf_cfg.samplerate, bpf_cfg.freq, bpf_cfg.width)
 
-     for i , val := range input {
+	for i, val := range input {
 		output[i] = bpf.Apply(val)
 	}
 
-     return output
+	return output
 }
 
 type PeakFFT struct {
-     index int
-     power float64
+	index int
+	power float64
 }
-     
 
 func DetectPeakFFT(threshold float64, y []float64) (result []PeakFFT) {
-     	peak_value := funk.MaxFloat64(y)
+	peak_value := funk.MaxFloat64(y)
 	delta := peak_value * threshold
 
 	mn := peak_value * float64(2.0)
@@ -747,9 +740,9 @@ func DetectPeakFFT(threshold float64, y []float64) (result []PeakFFT) {
 	return
 }
 
-func initdevice(){
+func initdevice() {
 	var err error
-	machinenum := combo.SelectedItem() 
+	machinenum := combo.SelectedItem()
 	maxsample := availabledevices[machinenum].maxsample
 	minsample := availabledevices[machinenum].minsample
 	rate_sound := samplingrate(maxsample, minsample)
@@ -768,7 +761,7 @@ func initdevice(){
 		DisplayModal("機器の初期化中に問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
 		DisplayToast(err.Error())
 		return
-		
+
 	}
 
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
@@ -808,8 +801,8 @@ func initdevice(){
 			}
 			pCapturedSamples = make([]int32, 0)
 			for i := 0; i < length_ring; i++ {
-		        	 buffer_int32[i] = int32(ringbuffer.Value.(float64))
-		        	 ringbuffer = ringbuffer.Next()
+				buffer_int32[i] = int32(ringbuffer.Value.(float64))
+				ringbuffer = ringbuffer.Next()
 			}
 			pCapturedSamples = append(pCapturedSamples, buffer_int32...)
 		} else {
@@ -824,7 +817,7 @@ func initdevice(){
 	if err != nil {
 		DisplayModal("機器の初期化中に問題が発生しました。音声機器の接続を確認し、プラグインウィンドウを開きなおしてください")
 		DisplayToast(err.Error())
-		return 
+		return
 	}
 
 	err = device.Start()
@@ -836,9 +829,9 @@ func initdevice(){
 }
 
 func IsSilent(ringbuffer *ring.Ring, sampling_freq uint32) bool {
-	len_buffer:=  ringbuffer.Len()
-        buffer_float64 := make([]float64, len_buffer)
-	for i := 0;  i < len_buffer; i++{
+	len_buffer := ringbuffer.Len()
+	buffer_float64 := make([]float64, len_buffer)
+	for i := 0; i < len_buffer; i++ {
 		//取り出すときにぐるっと一周してしまえば問題ない
 		buffer_float64[i] = ringbuffer.Value.(float64)
 		ringbuffer = ringbuffer.Next()
@@ -859,14 +852,14 @@ func IsSilent(ringbuffer *ring.Ring, sampling_freq uint32) bool {
 		}
 	}
 
-	mean = mean/float64(cnt)
+	mean = mean / float64(cnt)
 
-        switch{
-	case  peakPower / mean < 10.0 :
+	switch {
+	case peakPower/mean < 10.0:
 		return true
-	case peakPower == 0 :
+	case peakPower == 0:
 		return true
-	default :
+	default:
 		return false
 	}
 }
