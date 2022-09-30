@@ -261,7 +261,7 @@ func createWindow() {
 	dock := winc.NewSimpleDock(form)
 	dock.Dock(combo, winc.Top)
 	dock.Dock(combo3, winc.Top)
-	dock.Dock(cwview.list, winc.Bottom)
+	dock.Dock(cwview.list, winc.Left)
 	dock.Dock(pane, winc.Fill)
 
 	initdevice()
@@ -367,7 +367,9 @@ func decode_main(SoundData []int32, rate_sound uint32) {
 		}
 
 		if form.Visible() {
-			picupdate(smoothed, edge, rate_sound, morsestrings, i)
+		   	if i == 0 {
+			   picupdate(smoothed, edge, rate_sound, morsestrings, i)
+			}
 			if min(len(fft_peak), 3) == i+1 {
 				listupdate(cwitems)
 			}
