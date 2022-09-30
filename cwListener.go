@@ -35,6 +35,7 @@ import (
 	"github.com/mash/gokmeans"
 	"github.com/mjibson/go-dsp/spectral"
 	"github.com/thoas/go-funk"
+	"github.com/moutend/go-equalizer/pkg/equalizer"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/plotutil"
@@ -43,13 +44,17 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sort"
 	"unsafe"
 	"container/ring"
 )
 
 const (
 	CWLISTENER_NAME = "cwListener"
-	recordtime = 0.8
+	recordtime = 0.8 //リングバッファの時間
+	limit_recordtime = 3.0 //解析に回る最低限の時間
+	fft_peak_delta = 0.3
+	bandpass_width = 0.2
 )
 
 var (
@@ -64,8 +69,6 @@ var (
 var morse string
 
 var cwtable = make(map[string]string)
-
-var abort	chan struct{}
 
 var (
 	deviceinfos  []deviceinfostruct
@@ -82,19 +85,6 @@ type deviceinfostruct struct {
 	minsample  uint32
 }
 
-type CWView struct {
-	list *winc.ListView
-}
-
-var cwview CWView
-
-type CWItem struct {
-	level string
-	morseresult	string
-}
-
-var cwitemarr []CWItem
-
 //constがないのでvarで対応
 var opt = spectral.PwelchOptions{
 	NFFT : 4096, 
@@ -104,9 +94,30 @@ var opt = spectral.PwelchOptions{
 	Scale_off : false,
 }
 
+type CWView struct {
+	list *winc.ListView
+}
+
+var cwview CWView
+
+type CWItem struct {
+	freq1 string
+	morseresult1 string
+	freq2 string
+	morseresult2 string
+	freq3 string
+	morseresult3 string
+}
+
+var cwitemarr []CWItem
+
 func (item CWItem) Text() (text []string){
-	text = append(text, item.level)
-	text = append(text, item.morseresult)
+	text = append(text, item.freq1)
+	text = append(text, item.morseresult1)
+	text = append(text, item.freq2)
+	text = append(text, item.morseresult2)
+	text = append(text, item.freq3)
+	text = append(text, item.morseresult3)
 	return
 }
 
@@ -228,13 +239,19 @@ func createWindow() {
 
 	cwview.list = winc.NewListView(form)
 	cwview.list.EnableEditLabels(false)
-	cwview.list.AddColumn("解析精度", 100)
-	cwview.list.AddColumn("解析結果", 200)
+	for i := 0 ; i < 3 ; i ++ {
+		cwview.list.AddColumn("解析周波数", 100)
+		cwview.list.AddColumn("解析結果", 200)
+	}
 
 	cwitemarr = make([]CWItem, 3)
 	for i := 0; i < len(cwitemarr); i++ {
-		cwitemarr[i].level = "none"
-		cwitemarr[i].morseresult = "未解析"
+		cwitemarr[i].freq1 = "-"
+		cwitemarr[i].morseresult1 = "未解析"
+		cwitemarr[i].freq2 = "-"
+		cwitemarr[i].morseresult2 = "未解析"
+		cwitemarr[i].freq3 = "-"
+		cwitemarr[i].morseresult3 = "未解析"
 	} 
 
 	for _, val := range cwitemarr {
@@ -245,7 +262,7 @@ func createWindow() {
 	dock := winc.NewSimpleDock(form)
 	dock.Dock(combo, winc.Top)
 	dock.Dock(combo3, winc.Top)
-	dock.Dock(cwview.list, winc.Left)
+	dock.Dock(cwview.list, winc.Bottom)
 	dock.Dock(pane, winc.Fill)
 
 	initdevice()
@@ -276,42 +293,96 @@ type Peak_XY struct {
 	X, Y int
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func decode_main(SoundData []int32, rate_sound uint32) {
 	len_sound := len(SoundData)
-	if len_sound == 0{
+
+	//無音で回ってきたら何もしない
+	if funk.MaxInt32(SoundData) == 0{
 		return
 	}
 
-	Signal64 := make([]float64, len_sound)
-	SquaredSignal64 := make([]float64, len_sound)
+	souce_arr := make([]float64, len_sound)
 	norm := float64(1.0) / float64(funk.MaxInt32(SoundData))
 	for i, val := range SoundData {
-		Signal64[i] = float64(val) * norm
-		SquaredSignal64[i] = float64(val) * float64(val) * norm * norm
+		souce_arr[i] = float64(val) * norm
 	}
 
-	ave_num := 6 * int(float64(rate_sound)/PeakFreq(Signal64, rate_sound))
+	powerarr, freqarr := PeakFreq(souce_arr, rate_sound)
+	fft_peak := DetectPeakFFT(float64(fft_peak_delta), powerarr)
 
-	smoothed := LPF(LPF(LPF(LPF(SquaredSignal64, ave_num), ave_num), ave_num), ave_num)
-	diff := OneStepDiff(smoothed)
-	edge := DetectPeak(thresholdmap[combo3.SelectedItem()], diff)
+	//ピークがないとき
+	if len(fft_peak) == 0 {
+		return
+	}
 
-	signalarr, morselevel := Decode(edge)
-	morsestrings := morsedecode(signalarr)
+	cwitems := CWItem{
+		freq1 : "-" , 
+		morseresult1 : "none", 
+		freq2 : "-", 
+		morseresult2 : "none",
+		freq3 : "-",
+		morseresult3 : "none",
+	}
 
-	if form.Visible() {
-		listupdate(morselevel, morsestrings)
-		picupdate(smoothed, edge, rate_sound,  morsestrings)
+
+	for i := 0 ; i < min(len(fft_peak), 3); i++{
+		fft_peak_freq := freqarr[fft_peak[i].index]
+		bpf_cfg := BPF_config{
+			samplerate : float64(rate_sound), 
+			freq	   : fft_peak_freq, 
+			width	   : float64(bandpass_width),
+		}
+
+
+		Signal64 := BPF(BPF(BPF(BPF(BPF(souce_arr, bpf_cfg), bpf_cfg),bpf_cfg),bpf_cfg),bpf_cfg)
+
+		ave_num := 6 * int(float64(rate_sound)/fft_peak_freq)
+
+		SquaredSignal64 := make([]float64, len(Signal64))
+		for i, val := range(Signal64){
+			SquaredSignal64[i] = val * val
+		}
+
+		smoothed := LPF(LPF(LPF(LPF(SquaredSignal64, ave_num), ave_num), ave_num), ave_num)
+		diff := OneStepDiff(smoothed)
+		edge := DetectPeak(thresholdmap[combo3.SelectedItem()], diff)
+
+		signalarr := Decode(edge)
+		morsestrings := morsedecode(signalarr)
+		freqstr :=  strconv.Itoa(int(fft_peak_freq))
+
+		switch i + 1 {
+		case 1 : 
+			cwitems.freq1 = freqstr
+			cwitems.morseresult1 = morsestrings
+		case 2 : 
+			cwitems.freq2 = freqstr
+			cwitems.morseresult2 = morsestrings
+		case 3 : 
+			cwitems.freq3 = freqstr
+			cwitems.morseresult3 = morsestrings
+		}
+
+		if form.Visible() {
+			picupdate(smoothed, edge, rate_sound,  morsestrings, i)
+			if  min(len(fft_peak), 3) == i+1{
+				listupdate(cwitems)
+			}
+		}	
 	}
 }
 
-func listupdate(morselevel string, morsestrings string){
+func listupdate(cwitems CWItem){
 	cwitemarr[0] = cwitemarr[1] 
 	cwitemarr[1] = cwitemarr[2] 
-	cwitemarr[2] = CWItem{
-		level : morselevel, 
-		morseresult : morsestrings,
-	}
+	cwitemarr[2] = cwitems
 
 	cwview.list.DeleteAllItems()
 		
@@ -321,7 +392,7 @@ func listupdate(morselevel string, morsestrings string){
 	return
 }
 
-func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32,  morsestrings string){
+func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32,  morsestrings string, index int){
 	pts := make(plotter.XYs, len(smoothed))
 
 	for i, val := range smoothed {
@@ -366,9 +437,9 @@ func picupdate(smoothed []float64, edge []Peak_XY, rate_sound uint32,  morsestri
 	p2.GlyphStyle.Color = color.RGBA{R: 155, B: 128, A: 255} // 紫
 	p.Add(p1)
 	p.Add(p2)
-	p.Save(10*vg.Inch, 3*vg.Inch, "smoothed.png")
+	p.Save(10*vg.Inch, 3*vg.Inch, "smoothed" + strconv.Itoa(index) + ".png")
 
-	view.DrawImageFile("smoothed.png")
+	view.DrawImageFile("smoothed" + strconv.Itoa(index) + ".png")
 	pane.Invalidate(true)
 
 	return
@@ -386,7 +457,7 @@ func samplingrate(maxsample uint32, minsample uint32) (sample uint32) {
 	return
 }
 
-func Decode(signal []Peak_XY) (string, string) {
+func Decode(signal []Peak_XY) string {
 	length_on_kmnode := make([]gokmeans.Node, 0)
 
 	//ピークはアルゴリズム的に極大スタート, 極大と極小は交互にくる, よって偶数番目にon（音あり）/奇数番目にoff（音無）が入る
@@ -440,10 +511,10 @@ func Decode(signal []Peak_XY) (string, string) {
 				}
 			}
 		}
-		return signalarr, "High"
+		return signalarr
 	} else {
 		interval = funk.MinFloat64(length_onoff)
-		return Decode_normal(signal, interval), "Low"
+		return Decode_normal(signal, interval)
 	}
 }
 
@@ -590,19 +661,90 @@ func LPF(source []float64, n int) (result []float64) {
 	return
 }
 
-func PeakFreq(signal []float64, sampling_freq uint32) float64 {
+func PeakFreq(signal []float64, sampling_freq uint32)([]float64, []float64) {
 	Power, Freq := spectral.Pwelch(signal, float64(sampling_freq), &opt)
-	peakFreq := 0.0
+
 	peakPower := 0.0
+	powerarr := make([]float64, 0)
+	freqarr := make([]float64, 0)
 	for i, val := range Freq {
 		if val > 200 && val < 2000 {
+		       powerarr = append(powerarr, Power[i])
+		       freqarr = append(freqarr, val)
 			if Power[i] > peakPower {
 				peakPower = Power[i]
-				peakFreq = val
 			}
 		}
 	}
-	return peakFreq
+
+	return powerarr, freqarr
+}
+
+type BPF_config struct {
+     samplerate float64
+     freq	float64
+     width	float64
+}
+
+func BPF(input []float64, bpf_cfg BPF_config) []float64{
+     output := make([]float64, len(input))
+     bpf := equalizer.NewBandPass(bpf_cfg.samplerate, bpf_cfg.freq, bpf_cfg.width)
+
+     for i , val := range input {
+		output[i] = bpf.Apply(val)
+	}
+
+     return output
+}
+
+type PeakFFT struct {
+     index int
+     power float64
+}
+     
+
+func DetectPeakFFT(threshold float64, y []float64) (result []PeakFFT) {
+     	peak_value := funk.MaxFloat64(y)
+	delta := peak_value * threshold
+
+	mn := peak_value * float64(2.0)
+	mx := float64(-1)
+	var mxpos int
+	result = make([]PeakFFT, 0)
+	var buf PeakFFT
+
+	lookformax := true
+
+	for i, this := range y {
+		if this > mx {
+			mx = this
+			mxpos = i
+		}
+
+		if this < mn {
+			mn = this
+		}
+
+		if lookformax {
+			if this < mx-delta {
+				buf.index = mxpos
+				buf.power = mx
+				result = append(result, buf)
+				mn = this
+				lookformax = false
+			}
+		} else {
+			if this > mn+delta {
+				mx = this
+				mxpos = i
+				lookformax = true
+			}
+		}
+	}
+
+	sort.Slice(result, func(i, j int) bool { return result[i].power > result[j].power })
+
+	return
 }
 
 func initdevice(){
@@ -642,6 +784,7 @@ func initdevice(){
 	pCapturedSamples := make([]int32, 0)
 
 	length_ring := int(float64(rate_sound) * float64(recordtime))
+	length_limit := int(float64(rate_sound) * float64(limit_recordtime))
 	ringbuffer := ring.New(length_ring)
 	buffer_int32 := make([]int32, length_ring)
 	for i := 0; i < length_ring; i++ {
@@ -660,7 +803,7 @@ func initdevice(){
 
 		if IsSilent(ringbuffer, rate_sound) {
 			// 録音データが入っているかどうかのif
-			if len(pCapturedSamples) > length_ring {
+			if len(pCapturedSamples) > length_limit {
 				go decode_main(pCapturedSamples, rate_sound)
 			}
 			pCapturedSamples = make([]int32, 0)
