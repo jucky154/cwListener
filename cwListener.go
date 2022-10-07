@@ -306,10 +306,10 @@ func decode_main(SoundData []int32, rate_sound uint32) {
 		return
 	}
 
-	souce_arr := make([]float64, len_sound)
+	souce_arr := make([]float64, min(len_sound, 40 * int(rate_sound)))
 	norm := float64(1.0) / float64(funk.MaxInt32(SoundData))
-	for i, val := range SoundData {
-		souce_arr[i] = float64(val) * norm
+	for i:= 0; i < min(len_sound, 40 * int(rate_sound)); i++ {
+		souce_arr[i] = float64(SoundData[i]) * norm
 	}
 
 	powerarr, freqarr := PeakFreq(souce_arr, rate_sound)
