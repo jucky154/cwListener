@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2022 JA1ZLO.
+ Copyright (C) 2022 JA1ZLO.
 */
 package main
 
@@ -148,7 +148,8 @@ func createWindow() {
 	}
 	combo.SetSelectedItem(0)
 	combo.OnSelectedChange().Bind(func(e *winc.Event) {
-		_ = ctx.Uninit()
+		device.Uninit()
+		ctx.Uninit()
 		ctx.Free()
 		initdevice()
 	})
@@ -188,12 +189,13 @@ func createWindow() {
 }
 
 func closeWindow(arg *winc.Event) {
+	device.Uninit()
 	_ = ctx.Uninit()
 	ctx.Free()
 	form.Close()
 }
 
-// この変数はモールス解析用（音声入力装置によって値が変わるので、下で代入する）
+//この変数はモールス解析用（音声入力装置によって値が変わるので、下で代入する）
 var decoder morse.Decoder
 
 var monitor morse.Monitor
@@ -313,7 +315,7 @@ func initdevice() {
 
 	//decodeに必要な情報をここで入れる
 	decoder = morse.Decoder{
-		Thre: 0.1,
+		Thre: 0.2,
 		Bias: 20,
 		Iter: 50,
 		STFT: &stft.STFT{
