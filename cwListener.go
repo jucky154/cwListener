@@ -87,8 +87,14 @@ func init() {
 func onLaunchEvent() {
 	reiwa.RunDelphi(runDelphi)
 	reiwa.HandleButton(CWLISTENER_WINDOW, func(num int) {
+		//見えているときは何もしない
+		if form.Visible() {
+			return
+		}
+
 		//コンボボックスの更新
 		availabledevices = availabledevice()
+		combo.DeleteAllItems()
 		for i, val := range availabledevices {
 			combo.InsertItem(i, trimnullstr(val.devicename))
 		}
@@ -99,6 +105,7 @@ func onLaunchEvent() {
 
 		//解析開始
 		initdevice()
+		return
 	})
 
 	createWindow()
@@ -222,12 +229,16 @@ func status_bool(mute, mute_before bool) (result string) {
 func decode_main(signal []float64) {
 	defer reiwa.DisplayPanic()
 
-	decode_result, mute_bool := monitor.Read(signal)
-
-	if len(decode_result) == 0{
+	//見えないときは何もしない
+	if !form.Visible() {
 		return
 	}
 
+	decode_result, mute_bool := monitor.Read(signal)
+
+	if len(decode_result) == 0 {
+		return
+	}
 
 	//まず、空の結果を最初に入れて置き、結果があるところは後で修正
 	cwitems := CWItem{
