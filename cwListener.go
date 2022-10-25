@@ -87,8 +87,21 @@ func init() {
 func onLaunchEvent() {
 	reiwa.RunDelphi(runDelphi)
 	reiwa.HandleButton(CWLISTENER_WINDOW, func(num int) {
-		createWindow()
+		//コンボボックスの更新
+		availabledevices = availabledevice()
+		for i, val := range availabledevices {
+			combo.InsertItem(i, trimnullstr(val.devicename))
+		}
+		combo.SetSelectedItem(0)
+
+		//フォームを表示
+		form.Show()
+
+		//解析開始
+		initdevice()
 	})
+
+	createWindow()
 }
 
 func availabledevice() (deviceinfos []deviceinfostruct) {
@@ -142,11 +155,6 @@ func createWindow() {
 
 	//コンボボックス
 	combo = winc.NewComboBox(form)
-	availabledevices = availabledevice()
-	for i, val := range availabledevices {
-		combo.InsertItem(i, trimnullstr(val.devicename))
-	}
-	combo.SetSelectedItem(0)
 	combo.OnSelectedChange().Bind(func(e *winc.Event) {
 		device.Uninit()
 		ctx.Uninit()
@@ -180,9 +188,6 @@ func createWindow() {
 	dock.Dock(combo, winc.Top)
 	dock.Dock(cwview.list, winc.Fill)
 
-	initdevice()
-	form.Show()
-
 	form.OnClose().Bind(closeWindow)
 
 	return
@@ -192,7 +197,7 @@ func closeWindow(arg *winc.Event) {
 	device.Uninit()
 	_ = ctx.Uninit()
 	ctx.Free()
-	form.Close()
+	form.Hide()
 }
 
 //この変数はモールス解析用（音声入力装置によって値が変わるので、下で代入する）
@@ -202,11 +207,13 @@ var monitor morse.Monitor
 
 var mute_bool_before bool
 
-func status_bool(mute bool) (result string) {
-	switch mute {
-	case true:
+func status_bool(mute, mute_before bool) (result string) {
+	switch {
+	case mute == true && mute_before == false:
 		result = "確定"
-	case false:
+	case mute == true && mute_before == true:
+		result = "ノイズのみ"
+	default:
 		result = "解析中"
 	}
 	return
@@ -217,14 +224,14 @@ func decode_main(signal []float64) {
 
 	decode_result, mute_bool := monitor.Read(signal)
 
-	//結果に何も入っていないときは何もしない
-	if len(decode_result) == 0 {
+	if len(decode_result) == 0{
 		return
 	}
 
+
 	//まず、空の結果を最初に入れて置き、結果があるところは後で修正
 	cwitems := CWItem{
-		status:       status_bool(mute_bool),
+		status:       status_bool(mute_bool, mute_bool_before),
 		morseresult1: "-",
 		morseresult2: "-",
 		morseresult3: "-",
@@ -301,8 +308,6 @@ func initdevice() {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
 	deviceConfig.Capture.Format = malgo.FormatS32
 	deviceConfig.Capture.Channels = 1
-	deviceConfig.Playback.Format = malgo.FormatS32
-	deviceConfig.Playback.Channels = 1
 	deviceConfig.SampleRate = rate_sound
 	deviceConfig.Capture.DeviceID = availabledevices[machinenum].deviceid
 	deviceConfig.Alsa.NoMMap = 1
