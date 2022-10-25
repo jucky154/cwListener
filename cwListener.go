@@ -13,6 +13,7 @@ import (
 	"github.com/tadvi/winc"
 	"math"
 	"unsafe"
+	"strings"
 	"zylo/morse"
 	"zylo/reiwa"
 	"zylo/win32"
@@ -87,7 +88,7 @@ func init() {
 func onLaunchEvent() {
 	reiwa.RunDelphi(runDelphi)
 	reiwa.HandleButton(CWLISTENER_WINDOW, func(num int) {
-		//見えているときは何もしない
+		//windowが出ているときは何もしない
 		if form.Visible() {
 			return
 		}
@@ -214,6 +215,8 @@ var monitor morse.Monitor
 
 var mute_bool_before bool
 
+var prev_texts []string
+
 func status_bool(mute, mute_before bool) (result string) {
 	switch {
 	case mute == true && mute_before == false:
@@ -222,6 +225,24 @@ func status_bool(mute, mute_before bool) (result string) {
 		result = "ノイズのみ"
 	default:
 		result = "解析中"
+	}
+	return
+}
+
+func correct_string(prev_text string , latest_text string, mute_before bool, mute bool) (shown_text string) {
+	for i := len(prev_text); i>= 1; i-- {
+		if strings.HasPrefix(latest_text, prev_text[:i]) {
+			shown_text = prev_text[:i]
+			break
+		}
+	}
+
+	if shown_text == ""{
+		shown_text = "-"
+	}
+
+	if mute == true && mute_before == false {
+		shown_text = latest_text
 	}
 	return
 }
@@ -249,14 +270,16 @@ func decode_main(signal []float64) {
 	}
 
 	for i := 0; i < int(math.Min(float64(len(decode_result)), float64(3))); i++ {
+		latest_text := morse.CodeToText(decode_result[i])
 		switch i + 1 {
 		case 1:
-			cwitems.morseresult1 = morse.CodeToText(decode_result[i])
+			cwitems.morseresult1 = correct_string(prev_texts[i], latest_text,  mute_bool_before, mute_bool)
 		case 2:
-			cwitems.morseresult2 = morse.CodeToText(decode_result[i])
+			cwitems.morseresult2 = correct_string(prev_texts[i], latest_text,  mute_bool_before, mute_bool)
 		case 3:
-			cwitems.morseresult3 = morse.CodeToText(decode_result[i])
+			cwitems.morseresult3 = correct_string(prev_texts[i], latest_text,  mute_bool_before, mute_bool)
 		}
+		prev_texts[i] = latest_text
 	}
 
 	cwitemarr[length_list-1] = cwitems
@@ -346,6 +369,8 @@ func initdevice() {
 		Squelch: 350,
 		MaxHold: length_limit / length_buffer,
 	}
+
+	prev_texts = []string {"-", "-", "-"}
 
 	mute_bool_before = true
 
