@@ -24,7 +24,7 @@ const (
 	WINDOW_H          = 300
 	WINDOW_W          = 700
 	length_list       = 10
-	recordtime        = 0.6  //リングバッファの時間[s]
+	recordtime        = 0.5  //リングバッファの時間[s]
 	limit_recordtime  = 60.0 //解析に回せる最大の時間[s]
 )
 
