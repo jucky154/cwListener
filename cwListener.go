@@ -92,6 +92,7 @@ func onLaunchEvent() {
 		//windowが出ているときは何もしない
 		if form.Visible() {
 			w32.SetForegroundWindow(form.Handle())
+			return
 		}
 
 		//コンボボックスの更新
