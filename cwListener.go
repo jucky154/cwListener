@@ -11,6 +11,7 @@ import (
 	"github.com/r9y9/gossp/stft"
 	"github.com/r9y9/gossp/window"
 	"github.com/tadvi/winc"
+	"github.com/tadvi/winc/w32"
 	"math"
 	"unsafe"
 	"strings"
@@ -90,7 +91,7 @@ func onLaunchEvent() {
 	reiwa.HandleButton(CWLISTENER_WINDOW, func(num int) {
 		//windowが出ているときは何もしない
 		if form.Visible() {
-			return
+			w32.SetForegroundWindow(form.Handle())
 		}
 
 		//コンボボックスの更新
