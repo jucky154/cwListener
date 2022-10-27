@@ -203,6 +203,7 @@ func createWindow() {
 }
 
 func closeWindow(arg *winc.Event) {
+	defer reiwa.DisplayPanic()
 	device.Uninit()
 	ctx.Uninit()
 
@@ -294,10 +295,12 @@ func decode_main(signal []float64) {
 
 	cwitemarr[length_list-1] = cwitems
 
-	//リストの更新
-	cwview.list.DeleteAllItems()
-	for _, val := range cwitemarr {
-		cwview.list.AddItem(val)
+	//リストの更新（画面ないのにやったらまずそうなので）
+	if form.Visible() {
+		cwview.list.DeleteAllItems()
+		for _, val := range cwitemarr {
+			cwview.list.AddItem(val)
+		}
 	}
 
 	switch {
