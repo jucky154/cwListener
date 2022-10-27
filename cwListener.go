@@ -361,7 +361,7 @@ func initdevice() {
 	decoder = morse.Decoder{
 		Thre: 0.1,
 		Iter: 10,
-		Bias: 20,
+		Bias: 10,
 		STFT: &stft.STFT{
 			FrameShift: int(rate_sound) / 50,
 			FrameLen:   2048,
