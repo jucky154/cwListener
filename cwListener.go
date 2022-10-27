@@ -168,7 +168,6 @@ func createWindow() {
 	combo.OnSelectedChange().Bind(func(e *winc.Event) {
 		device.Uninit()
 		ctx.Uninit()
-		ctx.Free()
 		initdevice()
 	})
 
@@ -205,8 +204,8 @@ func createWindow() {
 
 func closeWindow(arg *winc.Event) {
 	device.Uninit()
-	_ = ctx.Uninit()
-	ctx.Free()
+	ctx.Uninit()
+
 	form.Hide()
 }
 
