@@ -24,7 +24,7 @@ const (
 	WINDOW_H          = 300
 	WINDOW_W          = 700
 	length_list       = 10
-	recordtime        = 0.5  //リングバッファの時間[s]
+	recordtime        = 0.3  //リングバッファの時間[s]
 	limit_recordtime  = 60.0 //解析に回せる最大の時間[s]
 )
 
@@ -213,23 +213,23 @@ var decoder morse.Decoder
 
 var monitor morse.Monitor
 
-var mute_bool_before bool
+var before_finish bool
 
 var prev_texts []string
 
-func status_bool(mute, mute_before bool) (result string) {
+func status_bool(before_finish, finish bool) (result string) {
 	switch {
-	case mute == true && mute_before == false:
-		result = "確定"
-	case mute == true && mute_before == true:
+	case before_finish == true && finish == true :
 		result = "ノイズのみ"
-	default:
+	case before_finish == false && finish == true :
+		result = "確定"
+	default :
 		result = "解析中"
 	}
 	return
 }
 
-func correct_string(prev_text string , latest_text string, mute_before bool, mute bool) (shown_text string) {
+func correct_string(prev_text string , latest_text string, finish bool) (shown_text string) {
 	for i := len(prev_text); i>= 1; i-- {
 		if strings.HasPrefix(latest_text, prev_text[:i]) {
 			shown_text = prev_text[:i]
@@ -241,7 +241,7 @@ func correct_string(prev_text string , latest_text string, mute_before bool, mut
 		shown_text = "-"
 	}
 
-	if mute == true && mute_before == false {
+	if finish {
 		shown_text = latest_text
 	}
 	return
@@ -255,7 +255,16 @@ func decode_main(signal []float64) {
 		return
 	}
 
-	decode_result, mute_bool := monitor.Read(signal)
+	decode_result := monitor.Read(signal)
+
+	finish := true
+	morse_texts := make([]string, 0)
+	for _, message := range decode_result {
+		morse_texts = append(morse_texts, morse.CodeToText(message.Code)) 
+		if !message.Finish() {
+			finish = false
+		}
+	}
 
 	if len(decode_result) == 0 {
 		return
@@ -263,21 +272,21 @@ func decode_main(signal []float64) {
 
 	//まず、空の結果を最初に入れて置き、結果があるところは後で修正
 	cwitems := CWItem{
-		status:       status_bool(mute_bool, mute_bool_before),
+		status:       status_bool(before_finish, finish),
 		morseresult1: "-",
 		morseresult2: "-",
 		morseresult3: "-",
 	}
 
 	for i := 0; i < int(math.Min(float64(len(decode_result)), float64(3))); i++ {
-		latest_text := morse.CodeToText(decode_result[i])
+		latest_text := morse_texts[i]
 		switch i + 1 {
 		case 1:
-			cwitems.morseresult1 = correct_string(prev_texts[i], latest_text,  mute_bool_before, mute_bool)
+			cwitems.morseresult1 = correct_string(prev_texts[i], latest_text, finish)
 		case 2:
-			cwitems.morseresult2 = correct_string(prev_texts[i], latest_text,  mute_bool_before, mute_bool)
+			cwitems.morseresult2 = correct_string(prev_texts[i], latest_text, finish)
 		case 3:
-			cwitems.morseresult3 = correct_string(prev_texts[i], latest_text,  mute_bool_before, mute_bool)
+			cwitems.morseresult3 = correct_string(prev_texts[i], latest_text, finish)
 		}
 		prev_texts[i] = latest_text
 	}
@@ -290,17 +299,14 @@ func decode_main(signal []float64) {
 		cwview.list.AddItem(val)
 	}
 
-	//前も無音だったときは場所を更新しない
-	if mute_bool_before == true && mute_bool == true {
-		return
-	}
-	mute_bool_before = mute_bool
-
-	//確定ならば次のやつをだす
-	if mute_bool {
+	switch {
+	case before_finish == false && finish == true :
+		before_finish = finish
 		for i, val := range cwitemarr[1:] {
 			cwitemarr[i] = val
 		}
+	default :
+		before_finish = finish
 	}
 	return
 }
@@ -348,31 +354,29 @@ func initdevice() {
 	deviceConfig.PeriodSizeInMilliseconds = uint32(1000)
 
 	length_buffer := int(float64(rate_sound) * float64(recordtime))
-	length_limit := int(float64(rate_sound) * float64(limit_recordtime))
 
-	sound_buffer := make([]float64, length_buffer)
+	sound_buffer := make([]float64, 0)
 
 	//decodeに必要な情報をここで入れる
 	decoder = morse.Decoder{
-		Thre: 0.2,
+		Thre: 0.1,
+		Iter: 10,
 		Bias: 20,
-		Iter: 50,
 		STFT: &stft.STFT{
-			FrameShift: int(float64(rate_sound) / float64(100)),
-			FrameLen:   4096,
-			Window:     window.CreateHanning(4096),
+			FrameShift: int(rate_sound) / 50,
+			FrameLen:   2048,
+			Window:     window.CreateHanning(2048),
 		},
 	}
 
 	monitor = morse.Monitor{
+		MaxHold: int(rate_sound) * 60,
 		Decoder: decoder,
-		Squelch: 350,
-		MaxHold: length_limit / length_buffer,
 	}
 
-	prev_texts = []string {"-", "-", "-"}
+	before_finish = true 
 
-	mute_bool_before = true
+	prev_texts = []string {"-", "-", "-"}
 
 	buffer_cnt := 0
 
@@ -381,10 +385,11 @@ func initdevice() {
 		buffer := bytes.NewReader(pSample)
 		binary.Read(buffer, binary.LittleEndian, &Signalint)
 		for _, val := range Signalint {
-			sound_buffer[buffer_cnt] = float64(val)
+			sound_buffer = append(sound_buffer, float64(val))
 			buffer_cnt += 1
 			if buffer_cnt == length_buffer {
 				go decode_main(sound_buffer)
+				sound_buffer = make([]float64, 0)
 				buffer_cnt = 0
 			}
 		}
