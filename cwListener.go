@@ -256,7 +256,7 @@ func decode_main(signal []float64) {
 	if !form.Visible() {
 		return
 	}
-
+	
 	decode_result := monitor.Read(signal)
 
 	finish := true
@@ -266,10 +266,6 @@ func decode_main(signal []float64) {
 		if !message.Finish() {
 			finish = false
 		}
-	}
-
-	if len(decode_result) == 0 {
-		return
 	}
 
 	//まず、空の結果を最初に入れて置き、結果があるところは後で修正
@@ -366,6 +362,7 @@ func initdevice() {
 		Thre: 0.1,
 		Iter: 10,
 		Bias: 10,
+		Gain : 2.0,
 		STFT: &stft.STFT{
 			FrameShift: int(rate_sound) / 50,
 			FrameLen:   2048,
