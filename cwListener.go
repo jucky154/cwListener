@@ -49,8 +49,8 @@ var (
 )
 
 type morsedata struct {
-	age	int
-	text	string
+	age  int
+	text string
 }
 
 type deviceinfostruct struct {
@@ -258,7 +258,7 @@ func decode_main(signal []float64) {
 				miss = false
 				text := morse.CodeToText(m.Code)
 				if f_int < length_list {
-					now_results[f_int] =  correct_string(prev_text.text, text)
+					now_results[f_int] = correct_string(prev_text.text, text)
 					f_int += 1
 				}
 			}
@@ -266,7 +266,7 @@ func decode_main(signal []float64) {
 
 		//前回の解析において存在するが、音が続いていないものは右に移し、mapから削除
 		if result_data, ok := prev_results[f]; ok && miss {
-			if result_data.text != "-" && result_data.text != "?" && result_data.age > LIFE_THRESH{
+			if result_data.text != "-" && result_data.text != "?" && result_data.age > LIFE_THRESH {
 				for i := 0; i < length_list-1; i++ {
 					old_results[length_list-1-i] = old_results[length_list-2-i]
 				}
@@ -280,15 +280,15 @@ func decode_main(signal []float64) {
 	for _, m := range decode_results {
 		if m.Life >= LIFE_THRESH {
 			if _, ok := prev_results[m.Freq]; ok {
-				morseage := prev_results[m.Freq].age 
+				morseage := prev_results[m.Freq].age
 				prev_results[m.Freq] = morsedata{
-						age : morseage +1 ,
-						text : morse.CodeToText(m.Code),
+					age:  morseage + 1,
+					text: morse.CodeToText(m.Code),
 				}
 			} else {
 				prev_results[m.Freq] = morsedata{
-						age : 0,
-						text : morse.CodeToText(m.Code),
+					age:  0,
+					text: morse.CodeToText(m.Code),
 				}
 			}
 		}
